@@ -19,7 +19,7 @@ DEFAULT_AUDIO_ROOT = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer"))
 # AUDIO_TMP_DIR. Keep the CLI default aligned so users can run convert ->
 # transcribe without overriding flags.
 DEFAULT_TMP_DIR = DEFAULT_AUDIO_ROOT
-DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "base")
+DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "medium")
 DEFAULT_CACHE_DIR = Path(os.environ.get("WHISPER_CACHE_DIR", REPO_ROOT / "models/whisper_cache"))
 DEFAULT_CA_BUNDLE = os.environ.get("WHISPER_CA_BUNDLE")
 DEFAULT_INSECURE_SSL = os.environ.get("WHISPER_INSECURE_SSL", "false").lower() in {
