@@ -111,15 +111,23 @@ project_root/
    ```env
    BOT_TOKEN=<telegram-bot-token>
    OLLAMA_HOST=http://localhost:11434
+   # Настройка форматирования/LLM
+   FORMATTER_MODEL=llama3.1:8b
+   FORMATTER_TIMEOUT=120
+   FORMATTER_PROMPT_SOURCE=file
+   FORMATTER_PROMPT_PATH=models/llama_prompts/formatter_system_prompt.txt
+   # FORMATTER_PROMPT_TEXT=""  # Используется, если FORMATTER_PROMPT_SOURCE=inline
+
+   # Whisper и аудио
    WHISPER_MODEL=medium
-   AUDIO_TMP_DIR=/tmp/botsummarizer
-   TASK_QUEUE_LIMIT=2
-   # Опционально: тонкая настройка Whisper
    WHISPER_LANGUAGE=ru
    WHISPER_TEMPERATURE=0.0
    WHISPER_DEVICE=cpu
+   WHISPER_CACHE_DIR=./models/whisper_cache
    WHISPER_CA_BUNDLE=/etc/ssl/certs/corporate-ca.pem
    WHISPER_INSECURE_SSL=false
+   AUDIO_TMP_DIR=/tmp/botsummarizer
+   TASK_QUEUE_LIMIT=2
    ```
 
 4. **Установка зависимостей**
@@ -147,65 +155,68 @@ project_root/
 
 ## Модуль конвертации
 
-Для локальной отладки конвертации добавлен отдельный CLI-скрипт `tools/convert_audio.py`, который использует те же правила, что и бот. Системные требования прежние: Python 3.10+ и установленный в системе FFmpeg (должен быть доступен в `$PATH`).
+Для локальной отладки конвертации добавлен отдельный CLI-скрипт `tools/convert_audio.py`, который использует те же правила, что и бот. Все CLI автоматически подхватывают `.env` через `tools/_env.py`, поэтому можно задавать переменные один раз.
 
-- **Аргументы**
-  - `--input` (обязательный): относительный или абсолютный путь к исходному `.ogg` (или другому поддерживаемому FFmpeg) файлу.
-  - `--output-dir` (опциональный): каталог назначения. По умолчанию берётся `AUDIO_TMP_DIR` (если переменная окружения отсутствует, используется `/tmp/botsummarizer`).
-  - `--output-name` (опциональный): имя выходного файла без расширения. Если не задано, используется `stem` исходного файла и авто-суффикс.
-  - `--validate`: включает проверку, что WAV соответствует требованиям Whisper (16 кГц, mono, PCM S16LE).
-
-- **Дефолтные пути**. Все временные WAV складываются в каталог из `AUDIO_TMP_DIR`. CLI автоматически создаёт каталог, если он отсутствует, и удаляет файлы по `AudioProcessor.cleanup()` в боевом пайплайне.
-
-- **Пример запуска** (добавляйте эту команду в summary Codex, если правите конвертер):
+- **Системные требования**: Python 3.10+, установленный FFmpeg, доступный в `$PATH`.
+- **Аргументы CLI**:
+  - `--input` — путь к исходному `.ogg`/`.mp3` (обязательный).
+  - `--output-dir` — каталог назначения (по умолчанию `AUDIO_TMP_DIR`).
+  - `--output-name` — имя выходного файла без расширения.
+  - `--validate` — выполнить проверку параметров WAV после конвертации.
+- **Переменные окружения**:
+  - `AUDIO_TMP_DIR` — базовый каталог для временных WAV.
+- **Пример**:
 
   ```bash
   python tools/convert_audio.py --input test_files/voice_message.ogg --validate
   ```
 
-  Ожидаемый вывод:
-
-  ```
-  [INFO] Converted file saved to: /tmp/botsummarizer/voice_message_xxxxx.wav
-  ```
-
-  Проверить результат можно через:
-
-  ```bash
-  ls /tmp/botsummarizer
-  file /tmp/botsummarizer/voice_message_*.wav
-  ```
-
-  При любых ошибках (нет входного файла, FFmpeg не установлен, невалидный формат) CLI завершится с ненулевым кодом и напечатает `[ERROR] Conversion failed: ...`.
+  После успешного запуска в логе появится `Converted file saved to: <путь>` и файл можно проверить командами `ls`/`file`.
 
 ## Модуль транскрибации
 
-Для локальной отладки транскрибации добавлен CLI `tools/transcribe_audio.py`. Он использует `WhisperEngine` и ожидает наличие WAV в каталоге `AUDIO_TMP_DIR/Temporary` (туда же по умолчанию пишет `tools/convert_audio.py`). Если `--input` не передан, скрипт выбирает последний по времени изменения `.wav` в целевой директории.
+CLI `tools/transcribe_audio.py` оборачивает `WhisperEngine` и использует те же настройки, что и продакшен.
 
-- **Базовый запуск** (поиск последнего файла в `Temporary`):
+- **Аргументы CLI**:
+  - `--input` — путь к WAV. Если не указан, берётся последний файл в `--tmp-dir`.
+  - `--tmp-dir` — где лежат WAV (по умолчанию `AUDIO_TMP_DIR`).
+  - `--model`, `--language`, `--temperature`, `--device` — пробрасываются в Whisper.
+  - `--ca-bundle`, `--insecure-ssl` — настройки TLS для скачивания модели.
+  - `--verbose` — расширенное логирование.
+- **Переменные окружения**:
+  - `AUDIO_TMP_DIR`, `WHISPER_MODEL`, `WHISPER_LANGUAGE`, `WHISPER_DEVICE`, `WHISPER_CACHE_DIR`, `WHISPER_CA_BUNDLE`, `WHISPER_INSECURE_SSL`.
+- **Примеры**:
 
   ```bash
   python tools/transcribe_audio.py
+  python tools/transcribe_audio.py --input /tmp/botsummarizer/voice.wav --language ru --device cpu
   ```
 
-  Ожидаемый вывод:
+  В stdout всегда приходит строка `[TRANSCRIPT] ...`. Ошибки приводят к `[ERROR] Transcription failed: ...` и коду выхода `1`.
 
+Если при скачивании модели возникает `SSL: CERTIFICATE_VERIFY_FAILED`, воспользуйтесь параметром `--ca-bundle` или `WHISPER_CA_BUNDLE`. Флаг `--insecure-ssl` (или `WHISPER_INSECURE_SSL=true`) отключает проверку, но используйте его только как временный обходной путь.
+
+## Модуль форматирования
+
+`tools/format_text.py` позволяет локально проверить работу `FormattingLLMClient` без запуска Telegram-бота.
+
+- **Требования**: запущенный Ollama с нужной моделью и доступ к файлу системного промпта.
+- **Аргументы CLI**:
+  - Источник транскрипта: `--text`, `--input-file` или stdin.
+  - `--host`, `--model` — переопределяют `OLLAMA_HOST`/`FORMATTER_MODEL`.
+  - `--prompt`/`--prompt-file` — временно подменяют системный промпт.
+  - `--timeout` — таймаут запроса в секунду (по умолчанию `FORMATTER_TIMEOUT`).
+  - `--verbose` — подробные логи и прогресс стриминга.
+- **Переменные окружения**:
+  - `OLLAMA_HOST`, `FORMATTER_MODEL`, `FORMATTER_TIMEOUT`, `FORMATTER_PROMPT_SOURCE`, `FORMATTER_PROMPT_PATH`, `FORMATTER_PROMPT_TEXT`.
+- **Пример**:
+
+  ```bash
+  python tools/format_text.py --text "привет это тест" --verbose
+  python tools/format_text.py --input-file transcript.txt --prompt-file models/llama_prompts/formatter_system_prompt.txt
   ```
-  [INFO] Transcribing voice_message.wav (...)
-  [TRANSCRIPT] <итоговый текст>
-  ```
 
-- **Запуск с явным путём и параметрами модели**:
-
-```bash
-python tools/transcribe_audio.py --input /tmp/botsummarizer/Temporary/voice.wav --model medium --language ru --ca-bundle ~/certs/corp.pem
-```
-
-Вывод аналогичен: в stdout появится строка `[TRANSCRIPT] ...`, а логирование расскажет о загрузке модели, длительности аудио и выбранных параметрах. Известные предупреждения из Torch (`TypedStorage is deprecated`) и Whisper (`FP16 is not supported on CPU; using FP32 instead`) автоматически подавляются движком, чтобы не засорять консоль. Ошибки (отсутствует файл, нет WAV, проблемы с моделью) приводят к сообщению `[ERROR] Transcription failed: ...` и завершению с кодом `1`.
-
-Если при скачивании модели возникает `SSL: CERTIFICATE_VERIFY_FAILED`, воспользуйтесь параметром `--ca-bundle` или переменной `WHISPER_CA_BUNDLE`, чтобы передать корпоративный сертификат. Флаг `--insecure-ssl` (или `WHISPER_INSECURE_SSL=true`) отключает проверку, но подходит только как временный обходной путь.
-
-Перед запуском убедитесь, что WAV-файл уже подготовлен (через `tools/convert_audio.py` или другой совместимый способ) и лежит в директории `Temporary`.
+CLI выводит только отформатированный текст. При ошибке взаимодействия с Ollama команда вернёт код `1` и сообщение вида `Formatting failed: ...`.
 
 ## Очередь задач и производительность
 
