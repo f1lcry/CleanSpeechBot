@@ -1,3 +1,4 @@
+# Copyright (c) 2024 ChatGPT. Licensed under the Apache License 2.0.
 """Command-line interface for formatting transcripts via the local LLM."""
 from __future__ import annotations
 

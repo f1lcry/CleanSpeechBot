@@ -1,3 +1,4 @@
+# Copyright (c) 2024 ChatGPT. Licensed under the Apache License 2.0.
 """Command-line utility for transcribing WAV files via WhisperEngine."""
 from __future__ import annotations
 
