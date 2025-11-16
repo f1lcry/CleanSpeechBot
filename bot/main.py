@@ -61,6 +61,11 @@ async def bootstrap() -> None:
     logger.info("Bot bootstrap completed. Starting polling loop.")
     try:
         await dispatcher.start_polling(bot)
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received. Initiating graceful shutdown.")
+    except asyncio.CancelledError:
+        logger.info("Polling cancelled via asyncio. Propagating cancellation.")
+        raise
     except Exception:  # noqa: BLE001 - log and propagate unexpected shutdowns
         logger.exception("Dispatcher polling stopped due to an error.")
         raise
@@ -79,4 +84,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
