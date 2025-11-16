@@ -1,0 +1,13 @@
+[Unit]
+Description=BotSummarizer Telegram bot
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/botsummarizer
+EnvironmentFile=/opt/botsummarizer/.env
+ExecStart=/usr/bin/python -m bot.main
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
