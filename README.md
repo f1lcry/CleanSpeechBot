@@ -100,7 +100,8 @@ project_root/
 
 2. **Предварительная установка**
    - Python 3.10+
-   - FFmpeg
+   - FFmpeg (должен быть доступен в `$PATH`)
+   - GPU-драйверы/CUDA Toolkit, если планируется использовать `--device cuda` в Whisper
    - Docker и docker-compose
    - Ollama (для запуска Llama 3.1 8B)
    - Whisper модельные файлы (скачивание при первом запуске)
@@ -122,6 +123,8 @@ project_root/
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
+
+   `requirements.txt` тянет все необходимые Python-библиотеки: `aiogram`, `python-dotenv`, `ollama`, а также аудио-стек (`openai-whisper`, `torch==2.1.2`, `numpy<2`). Whisper подгружается локально — отдельного шага установки не требуется, модель скачивается автоматически в директорию кэша при первом запуске.
 
 5. **Запуск в разработке**
 
@@ -168,6 +171,33 @@ project_root/
   ```
 
   При любых ошибках (нет входного файла, FFmpeg не установлен, невалидный формат) CLI завершится с ненулевым кодом и напечатает `[ERROR] Conversion failed: ...`.
+
+## Модуль транскрибации
+
+Для локальной отладки транскрибации добавлен CLI `tools/transcribe_audio.py`. Он использует `WhisperEngine` и ожидает наличие WAV в каталоге `AUDIO_TMP_DIR/Temporary` (туда же по умолчанию пишет `tools/convert_audio.py`). Если `--input` не передан, скрипт выбирает последний по времени изменения `.wav` в целевой директории.
+
+- **Базовый запуск** (поиск последнего файла в `Temporary`):
+
+  ```bash
+  python tools/transcribe_audio.py
+  ```
+
+  Ожидаемый вывод:
+
+  ```
+  [INFO] Transcribing voice_message.wav (...)
+  [TRANSCRIPT] <итоговый текст>
+  ```
+
+- **Запуск с явным путём и параметрами модели**:
+
+  ```bash
+  python tools/transcribe_audio.py --input /tmp/botsummarizer/Temporary/voice.wav --model medium --language ru
+  ```
+
+  Вывод аналогичен: в stdout появится строка `[TRANSCRIPT] ...`, а логирование расскажет о загрузке модели, длительности аудио и выбранных параметрах. Ошибки (отсутствует файл, нет WAV, проблемы с моделью) приводят к сообщению `[ERROR] Transcription failed: ...` и завершению с кодом `1`.
+
+Перед запуском убедитесь, что WAV-файл уже подготовлен (через `tools/convert_audio.py` или другой совместимый способ) и лежит в директории `Temporary`.
 
 ## Очередь задач и производительность
 
