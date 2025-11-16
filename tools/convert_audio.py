@@ -1,3 +1,4 @@
+# Copyright (c) 2024 ChatGPT. Licensed under the Apache License 2.0.
 """Command-line utility for converting Telegram voice notes to WAV."""
 from __future__ import annotations
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2024 ChatGPT. Licensed under the Apache License 2.0.
 """Application entry point for the BotSummarizer project."""
 from __future__ import annotations
 
