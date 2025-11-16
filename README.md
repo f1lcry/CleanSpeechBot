@@ -100,7 +100,8 @@ project_root/
 
 2. **Предварительная установка**
    - Python 3.10+
-   - FFmpeg
+   - FFmpeg (должен быть доступен в `$PATH`)
+   - GPU-драйверы/CUDA Toolkit, если планируется использовать `--device cuda` в Whisper
    - Docker и docker-compose
    - Ollama (для запуска Llama 3.1 8B)
    - Whisper модельные файлы (скачивание при первом запуске)
@@ -113,6 +114,12 @@ project_root/
    WHISPER_MODEL=medium
    AUDIO_TMP_DIR=/tmp/botsummarizer
    TASK_QUEUE_LIMIT=2
+   # Опционально: тонкая настройка Whisper
+   WHISPER_LANGUAGE=ru
+   WHISPER_TEMPERATURE=0.0
+   WHISPER_DEVICE=cpu
+   WHISPER_CA_BUNDLE=/etc/ssl/certs/corporate-ca.pem
+   WHISPER_INSECURE_SSL=false
    ```
 
 4. **Установка зависимостей**
@@ -122,6 +129,8 @@ project_root/
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
+
+   `requirements.txt` тянет все необходимые Python-библиотеки: `aiogram`, `python-dotenv`, `ollama`, а также аудио-стек (`openai-whisper==20250625`, `torch==2.1.2`, `numpy<2`). Whisper подгружается локально — отдельного шага установки не требуется, модель скачивается автоматически в директорию кэша при первом запуске. Если корпоративная сеть подменяет SSL-сертификаты, укажите путь к корневому сертификату через `WHISPER_CA_BUNDLE` (или CLI-параметр `--ca-bundle`). В крайнем случае доступно отключение проверки (`WHISPER_INSECURE_SSL=true` или `--insecure-ssl`).
 
 5. **Запуск в разработке**
 
@@ -168,6 +177,35 @@ project_root/
   ```
 
   При любых ошибках (нет входного файла, FFmpeg не установлен, невалидный формат) CLI завершится с ненулевым кодом и напечатает `[ERROR] Conversion failed: ...`.
+
+## Модуль транскрибации
+
+Для локальной отладки транскрибации добавлен CLI `tools/transcribe_audio.py`. Он использует `WhisperEngine` и ожидает наличие WAV в каталоге `AUDIO_TMP_DIR/Temporary` (туда же по умолчанию пишет `tools/convert_audio.py`). Если `--input` не передан, скрипт выбирает последний по времени изменения `.wav` в целевой директории.
+
+- **Базовый запуск** (поиск последнего файла в `Temporary`):
+
+  ```bash
+  python tools/transcribe_audio.py
+  ```
+
+  Ожидаемый вывод:
+
+  ```
+  [INFO] Transcribing voice_message.wav (...)
+  [TRANSCRIPT] <итоговый текст>
+  ```
+
+- **Запуск с явным путём и параметрами модели**:
+
+```bash
+python tools/transcribe_audio.py --input /tmp/botsummarizer/Temporary/voice.wav --model medium --language ru --ca-bundle ~/certs/corp.pem
+```
+
+Вывод аналогичен: в stdout появится строка `[TRANSCRIPT] ...`, а логирование расскажет о загрузке модели, длительности аудио и выбранных параметрах. Известные предупреждения из Torch (`TypedStorage is deprecated`) и Whisper (`FP16 is not supported on CPU; using FP32 instead`) автоматически подавляются движком, чтобы не засорять консоль. Ошибки (отсутствует файл, нет WAV, проблемы с моделью) приводят к сообщению `[ERROR] Transcription failed: ...` и завершению с кодом `1`.
+
+Если при скачивании модели возникает `SSL: CERTIFICATE_VERIFY_FAILED`, воспользуйтесь параметром `--ca-bundle` или переменной `WHISPER_CA_BUNDLE`, чтобы передать корпоративный сертификат. Флаг `--insecure-ssl` (или `WHISPER_INSECURE_SSL=true`) отключает проверку, но подходит только как временный обходной путь.
+
+Перед запуском убедитесь, что WAV-файл уже подготовлен (через `tools/convert_audio.py` или другой совместимый способ) и лежит в директории `Temporary`.
 
 ## Очередь задач и производительность
 

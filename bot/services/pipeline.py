@@ -37,9 +37,13 @@ class VoicePipeline:
 
         logger.info("Starting voice processing for: %s", audio_path)
 
+        cleanup_candidate: Path | None = None
+        converted_path = audio_path
         try:
             converted_path = self.audio_processor.convert_to_wav(source_path=audio_path)
             self.audio_processor.validate_audio(audio_path=converted_path)
+            if converted_path != audio_path:
+                cleanup_candidate = converted_path
         except NotImplementedError:
             logger.debug("Audio processing is not yet implemented.")
             converted_path = audio_path
@@ -49,6 +53,12 @@ class VoicePipeline:
         except NotImplementedError:
             logger.debug("Whisper transcription is not yet implemented.")
             transcript = ""
+        except Exception as exc:
+            logger.error("Whisper transcription failed: %s", exc)
+            raise
+        else:
+            if cleanup_candidate is not None:
+                self.audio_processor.cleanup(audio_path=cleanup_candidate)
 
         try:
             formatted_text = await self.formatting_client.format_text(text=transcript)

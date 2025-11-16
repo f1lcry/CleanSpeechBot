@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 
@@ -28,7 +27,15 @@ async def bootstrap() -> None:
     dispatcher = Dispatcher()
 
     audio_processor = AudioProcessor(tmp_dir=config.audio_tmp_dir)
-    whisper_engine = WhisperEngine(model_name=config.whisper_model, cache_dir=Path("models/whisper_cache"))
+    whisper_engine = WhisperEngine(
+        model_name=config.whisper_model,
+        cache_dir=config.audio_tmp_dir,
+        language=config.whisper_language,
+        temperature=config.whisper_temperature,
+        device=config.whisper_device,
+        ssl_cert_file=config.whisper_ca_bundle,
+        allow_insecure_ssl=config.whisper_insecure_ssl,
+    )
     formatting_client = FormattingLLMClient(host=config.ollama_host, model="llama3.1-8b")
     task_queue = TaskQueueManager(maxsize=config.task_queue_limit)
     pipeline = VoicePipeline(

@@ -18,6 +18,11 @@ class BotConfig:
     whisper_model: str
     audio_tmp_dir: Path
     task_queue_limit: int
+    whisper_language: Optional[str]
+    whisper_temperature: float
+    whisper_device: Optional[str]
+    whisper_ca_bundle: Optional[Path]
+    whisper_insecure_ssl: bool
 
 
 def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
@@ -41,6 +46,12 @@ def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
 
     audio_tmp_dir = Path(str(audio_tmp_dir_raw))
     task_queue_limit = int(task_queue_limit_raw)
+    whisper_language = values.get("WHISPER_LANGUAGE") or None
+    whisper_temperature = float(values.get("WHISPER_TEMPERATURE", "0.0"))
+    whisper_device = values.get("WHISPER_DEVICE") or None
+    whisper_ca_bundle_raw = values.get("WHISPER_CA_BUNDLE")
+    whisper_ca_bundle = Path(whisper_ca_bundle_raw).expanduser() if whisper_ca_bundle_raw else None
+    whisper_insecure_ssl = _parse_bool(values.get("WHISPER_INSECURE_SSL", "false"))
 
     return BotConfig(
         bot_token=str(bot_token),
@@ -48,4 +59,18 @@ def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
         whisper_model=str(whisper_model),
         audio_tmp_dir=audio_tmp_dir,
         task_queue_limit=task_queue_limit,
+        whisper_language=whisper_language,
+        whisper_temperature=whisper_temperature,
+        whisper_device=whisper_device,
+        whisper_ca_bundle=whisper_ca_bundle,
+        whisper_insecure_ssl=whisper_insecure_ssl,
     )
+
+
+def _parse_bool(value: Optional[str]) -> bool:
+    """Parse typical truthy string values into a boolean."""
+
+    if value is None:
+        return False
+
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
