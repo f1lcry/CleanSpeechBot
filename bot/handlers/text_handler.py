@@ -1,7 +1,7 @@
 """Handlers for processing text messages."""
 from __future__ import annotations
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
@@ -10,13 +10,16 @@ text_router = Router(name="text_router")
 
 @text_router.message(CommandStart())
 async def handle_start(message: Message) -> None:
-    """Reply to the /start command with a placeholder message."""
+    """Describe the bot workflow when /start is received."""
 
-    await message.answer("Привет! Отправьте голосовое сообщение для обработки (заглушка).")
+    await message.answer("Привет! Пришли голосовое — получишь summary.")
 
 
-@text_router.message()
+@text_router.message(F.text)
 async def handle_text(message: Message) -> None:
-    """Reply to any text message with a placeholder response."""
+    """Encourage users to send an audio message instead of plain text."""
 
-    await message.answer("Текстовые сообщения пока не обрабатываются (заглушка).")
+    await message.answer(
+        "Чтобы получить summary, пришли голосовое или аудио-файл."
+        " Текстовые сообщения бот не обрабатывает."
+    )
