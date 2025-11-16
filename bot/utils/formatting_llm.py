@@ -12,9 +12,8 @@ from ollama import AsyncClient, RequestError, ResponseError
 
 logger = logging.getLogger("bot.formatting")
 
-DEFAULT_PROMPT_PATH = (
-    Path(__file__).resolve().parents[2] / "models" / "llama_prompts" / "formatter_system_prompt.txt"
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PROMPT_PATH = PROJECT_ROOT / "models" / "llama_prompts" / "formatter_system_prompt.txt"
 _FILE_SOURCES = {"file", "path", "filesystem"}
 _INLINE_SOURCES = {"inline", "env", "environment", "text"}
 
@@ -47,6 +46,8 @@ def load_formatter_prompt(
     if source in _FILE_SOURCES:
         prompt_path_raw = values.get("FORMATTER_PROMPT_PATH")
         prompt_path = Path(prompt_path_raw).expanduser() if prompt_path_raw else fallback_path
+        if prompt_path and not prompt_path.is_absolute():
+            prompt_path = PROJECT_ROOT / prompt_path
         try:
             content = prompt_path.read_text(encoding="utf-8")
         except FileNotFoundError as exc:
