@@ -15,7 +15,10 @@ from bot.utils.whisper_engine import WhisperEngine
 
 
 DEFAULT_AUDIO_ROOT = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer"))
-DEFAULT_TMP_DIR = DEFAULT_AUDIO_ROOT / "Temporary"
+# Conversion utilities and the runtime pipeline both write WAV files directly into
+# AUDIO_TMP_DIR. Keep the CLI default aligned so users can run convert ->
+# transcribe without overriding flags.
+DEFAULT_TMP_DIR = DEFAULT_AUDIO_ROOT
 DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "base")
 DEFAULT_CACHE_DIR = Path(os.environ.get("WHISPER_CACHE_DIR", REPO_ROOT / "models/whisper_cache"))
 DEFAULT_CA_BUNDLE = os.environ.get("WHISPER_CA_BUNDLE")
@@ -42,14 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Optional explicit path to a WAV file. "
-            "When omitted, the latest file in --tmp-dir (default AUDIO_TMP_DIR/Temporary) is used."
+            "When omitted, the latest file in --tmp-dir (default AUDIO_TMP_DIR) is used."
         ),
     )
     parser.add_argument(
         "--tmp-dir",
         type=Path,
         default=DEFAULT_TMP_DIR,
-        help="Directory that stores WAV files (defaults to AUDIO_TMP_DIR/Temporary).",
+        help="Directory that stores WAV files (defaults to AUDIO_TMP_DIR).",
     )
     parser.add_argument(
         "--model",
