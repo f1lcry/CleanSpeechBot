@@ -100,7 +100,7 @@ project_root/
 
 2. **Предварительная установка**
    - Python 3.10+
-   - FFmpeg
+   - FFmpeg (проверьте `ffmpeg -version`; путь можно передать через `FFMPEG_BINARY`)
    - Docker и docker-compose
    - Ollama (для запуска Llama 3.1 8B)
    - Whisper модельные файлы (скачивание при первом запуске)
@@ -140,19 +140,19 @@ project_root/
 
 Пайплайн можно тестировать по частям без Telegram, чтобы быстрее диагностировать проблемы.
 
-1. **Конвертация аудио** — принимает любой OGG/MP3/WAV, складывает артефакты во временную папку (`AUDIO_TMP_DIR`) и гарантирует очистку:
+1. **Конвертация аудио** — принимает любой OGG/MP3/WAV, складывает артефакты во временную папку (`AUDIO_TMP_DIR`) и гарантирует очистку. FFmpeg обязателен: установите системный пакет (`brew install ffmpeg`, `apt install ffmpeg` и т. п.) или передайте путь вручную:
 
    ```bash
-   python -m bot.utils.audio --src path/to/input.ogg --dst /tmp/out.wav
+   python -m bot.utils.audio --src path/to/input.ogg --dst /tmp/out.wav --ffmpeg-binary /usr/local/bin/ffmpeg
    ```
 
-2. **Whisper** — запускает локальную модель из `models/whisper_cache` и выводит транскрипт в STDOUT:
+2. **Whisper** — запускает локальную модель из `models/whisper_cache` и выводит транскрипт в STDOUT. В средах с перехватом TLS (self-signed proxy) используйте `--cafile` с доверенным сертификатом или `--allow-insecure-download`:
 
    ```bash
-   python -m bot.utils.whisper_engine --audio /tmp/out.wav --model medium
+   python -m bot.utils.whisper_engine --audio /tmp/out.wav --model medium --cafile /etc/ssl/certs/custom.pem
    ```
 
-3. **Форматирование через Ollama** — отправляет текст на локальный `/api/generate` и печатает результат:
+3. **Форматирование через Ollama** — отправляет текст на локальный `/api/generate` и печатает результат. Перед запуском убедитесь, что `ollama serve` запущен и модель скачана (`ollama run llama3.1`):
 
    ```bash
    python -m bot.utils.formatting_llm --text "сырой текст" --host http://localhost:11434

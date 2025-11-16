@@ -64,6 +64,13 @@ class FormattingLLMClient:
                 async with session.post(f"{self.host}/api/generate", json=payload) as response:
                     response.raise_for_status()
                     data: Any = await response.json()
+            except aiohttp.ClientConnectorError as exc:
+                message = (
+                    "Не удалось подключиться к Ollama. Убедитесь, что сервер запущен по адресу "
+                    f"{self.host} и порт не занят."
+                )
+                logger.error("Formatting task %s failed: %s", job_id, message)
+                raise RuntimeError(message) from exc
             except aiohttp.ClientError as exc:
                 logger.exception("Formatting task %s failed during HTTP request: %s", job_id, exc)
                 raise RuntimeError("Не удалось выполнить форматирование текста.") from exc
@@ -90,7 +97,10 @@ def _cli() -> None:
     parser.add_argument("--model", default="llama3.1-8b", help="Name of the Ollama model to use.")
     args = parser.parse_args()
 
-    asyncio.run(_cli_async(text=args.text, host=args.host, model=args.model))
+    try:
+        asyncio.run(_cli_async(text=args.text, host=args.host, model=args.model))
+    except RuntimeError as exc:  # pragma: no cover - CLI helper
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":

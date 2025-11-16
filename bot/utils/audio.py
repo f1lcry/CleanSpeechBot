@@ -20,10 +20,23 @@ class AudioProcessor:
     MAX_DURATION_SECONDS = 300  # Whisper inference is limited to ~5 минут.
     MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 МБ на одно сообщение.
 
-    def __init__(self, tmp_dir: Path) -> None:
-        """Initialize the processor with a temporary directory."""
+    def __init__(self, tmp_dir: Path, ffmpeg_binary: str | Path | None = None) -> None:
+        """Initialize the processor with a temporary directory and FFmpeg binary."""
 
         self.tmp_dir = tmp_dir
+        binary = str(ffmpeg_binary) if ffmpeg_binary else os.environ.get("FFMPEG_BINARY", "ffmpeg")
+        self.ffmpeg_binary = binary
+
+    def _resolve_ffmpeg_binary(self) -> str:
+        """Return the FFmpeg binary path or raise a helpful error if missing."""
+
+        resolved = shutil.which(self.ffmpeg_binary)
+        if resolved:
+            return resolved
+
+        raise RuntimeError(
+            "FFmpeg не найден. Установите ffmpeg (https://ffmpeg.org/) или укажите путь через FFMPEG_BINARY."
+        )
 
     def convert_to_wav(self, source_path: Path) -> Path:
         """Convert the input audio file to WAV format using FFmpeg."""
@@ -36,7 +49,7 @@ class AudioProcessor:
         output_path = self.tmp_dir / output_name
 
         command = [
-            "ffmpeg",
+            self._resolve_ffmpeg_binary(),
             "-y",
             "-i",
             str(source_path),
@@ -56,8 +69,6 @@ class AudioProcessor:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-        except FileNotFoundError as exc:  # pragma: no cover - runtime environment requirement.
-            raise RuntimeError("FFmpeg is required but not installed or not in PATH.") from exc
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"FFmpeg failed to convert audio: {exc}") from exc
 
@@ -120,10 +131,19 @@ def _cli() -> None:
         default=Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer")),
         help="Temporary directory used for intermediate WAV files.",
     )
+    parser.add_argument(
+        "--ffmpeg-binary",
+        type=str,
+        default=os.environ.get("FFMPEG_BINARY"),
+        help="Path to ffmpeg if it is not available in PATH.",
+    )
     args = parser.parse_args()
 
-    processor = AudioProcessor(tmp_dir=args.tmp_dir)
-    converted = processor.convert_to_wav(args.src)
+    processor = AudioProcessor(tmp_dir=args.tmp_dir, ffmpeg_binary=args.ffmpeg_binary)
+    try:
+        converted = processor.convert_to_wav(args.src)
+    except RuntimeError as exc:  # pragma: no cover - CLI helper
+        parser.error(str(exc))
     try:
         processor.validate_audio(converted)
         args.dst.parent.mkdir(parents=True, exist_ok=True)
