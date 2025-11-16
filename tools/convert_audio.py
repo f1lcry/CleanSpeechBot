@@ -17,7 +17,7 @@ from tools import _env  # noqa: F401  # Ensure .env is loaded and repo root is o
 from bot.utils.audio import AudioProcessor
 
 
-DEFAULT_TMP_DIR = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer"))
+DEFAULT_TMP_DIR = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/cleanspeechbot"))
 
 
 def build_parser() -> argparse.ArgumentParser:
