@@ -54,9 +54,22 @@ async def bootstrap() -> None:
     dispatcher.include_router(text_router)
     dispatcher.include_router(voice_router)
 
-    logger.info("Bot bootstrap completed (stub). Aiogram polling not started in this skeleton.")
+    worker_count = max(1, config.task_queue_limit)
+    logger.info("Starting %s task queue workers", worker_count)
+    await task_queue.start_workers(worker_count)
 
-    await bot.session.close()
+    logger.info("Bot bootstrap completed. Starting polling loop.")
+    try:
+        await dispatcher.start_polling(bot)
+    except Exception:  # noqa: BLE001 - log and propagate unexpected shutdowns
+        logger.exception("Dispatcher polling stopped due to an error.")
+        raise
+    finally:
+        logger.info("Polling finished. Waiting for task queue to drain.")
+        await task_queue.queue.join()
+        await task_queue.shutdown()
+        await bot.session.close()
+        logger.info("Bot shutdown completed.")
 
 
 async def main() -> None:

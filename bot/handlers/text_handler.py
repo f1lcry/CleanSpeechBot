@@ -10,13 +10,20 @@ text_router = Router(name="text_router")
 
 @text_router.message(CommandStart())
 async def handle_start(message: Message) -> None:
-    """Reply to the /start command with a placeholder message."""
+    """Describe the bot workflow when /start is received."""
 
-    await message.answer("Привет! Отправьте голосовое сообщение для обработки (заглушка).")
+    await message.answer(
+        "Привет! Пришли голосовое — получишь summary.\n"
+        "Алгоритм простой: скачиваем файл, конвертируем, распознаём Whisper и"
+        " форматируем текст локальной Llama."
+    )
 
 
 @text_router.message()
 async def handle_text(message: Message) -> None:
-    """Reply to any text message with a placeholder response."""
+    """Encourage users to send an audio message instead of plain text."""
 
-    await message.answer("Текстовые сообщения пока не обрабатываются (заглушка).")
+    await message.answer(
+        "Чтобы получить краткий конспект, отправь голосовое или аудио-файл."
+        " Текстовые сообщения бот игнорирует."
+    )
