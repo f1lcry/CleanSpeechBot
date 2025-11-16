@@ -36,7 +36,12 @@ async def bootstrap() -> None:
         ssl_cert_file=config.whisper_ca_bundle,
         allow_insecure_ssl=config.whisper_insecure_ssl,
     )
-    formatting_client = FormattingLLMClient(host=config.ollama_host, model="llama3.1-8b")
+    formatting_client = FormattingLLMClient(
+        host=config.ollama_host,
+        model=config.formatter_model,
+        system_prompt=config.formatter_prompt,
+        request_timeout=config.formatter_timeout,
+    )
     task_queue = TaskQueueManager(maxsize=config.task_queue_limit)
     pipeline = VoicePipeline(
         audio_processor=audio_processor,

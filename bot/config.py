@@ -8,6 +8,8 @@ from typing import Optional
 
 from dotenv import dotenv_values
 
+from bot.utils.formatting_llm import load_formatter_prompt
+
 
 @dataclass(slots=True)
 class BotConfig:
@@ -23,6 +25,9 @@ class BotConfig:
     whisper_device: Optional[str]
     whisper_ca_bundle: Optional[Path]
     whisper_insecure_ssl: bool
+    formatter_model: str
+    formatter_prompt: str
+    formatter_timeout: float
 
 
 def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
@@ -52,6 +57,9 @@ def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
     whisper_ca_bundle_raw = values.get("WHISPER_CA_BUNDLE")
     whisper_ca_bundle = Path(whisper_ca_bundle_raw).expanduser() if whisper_ca_bundle_raw else None
     whisper_insecure_ssl = _parse_bool(values.get("WHISPER_INSECURE_SSL", "false"))
+    formatter_model = values.get("FORMATTER_MODEL", "llama3.1:8b")
+    formatter_timeout = float(values.get("FORMATTER_TIMEOUT", "120"))
+    formatter_prompt = load_formatter_prompt(values)
 
     return BotConfig(
         bot_token=str(bot_token),
@@ -64,6 +72,9 @@ def load_config(env_file: Optional[str | Path] = None) -> BotConfig:
         whisper_device=whisper_device,
         whisper_ca_bundle=whisper_ca_bundle,
         whisper_insecure_ssl=whisper_insecure_ssl,
+        formatter_model=str(formatter_model),
+        formatter_prompt=formatter_prompt,
+        formatter_timeout=formatter_timeout,
     )
 
 
