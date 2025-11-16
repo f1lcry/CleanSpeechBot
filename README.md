@@ -136,6 +136,32 @@ project_root/
    docker-compose up --build
    ```
 
+## Автономное тестирование модулей
+
+Пайплайн можно тестировать по частям без Telegram, чтобы быстрее диагностировать проблемы.
+
+1. **Конвертация аудио** — принимает любой OGG/MP3/WAV, складывает артефакты во временную папку (`AUDIO_TMP_DIR`) и гарантирует очистку:
+
+   ```bash
+   python -m bot.utils.audio --src path/to/input.ogg --dst /tmp/out.wav
+   ```
+
+2. **Whisper** — запускает локальную модель из `models/whisper_cache` и выводит транскрипт в STDOUT:
+
+   ```bash
+   python -m bot.utils.whisper_engine --audio /tmp/out.wav --model medium
+   ```
+
+3. **Форматирование через Ollama** — отправляет текст на локальный `/api/generate` и печатает результат:
+
+   ```bash
+   python -m bot.utils.formatting_llm --text "сырой текст" --host http://localhost:11434
+   ```
+
+4. **Полный бот** — стандартный запуск `python -m bot.main`, который инициализирует очередь задач, воркеры и Aiogram-поллинг.
+
+Во всех сценариях временные файлы создаются исключительно в `AUDIO_TMP_DIR` и удаляются сразу после завершения обработки, что соблюдает требования из раздела про Stream Processing.
+
 ## Очередь задач и производительность
 
 - Очередь реализована в `bot/utils/workers.py`, управляется через asyncio.

@@ -42,9 +42,16 @@ async def bootstrap() -> None:
     dispatcher.include_router(text_router)
     dispatcher.include_router(voice_router)
 
-    logger.info("Bot bootstrap completed (stub). Aiogram polling not started in this skeleton.")
+    worker_count = max(1, config.task_queue_limit)
+    await task_queue.start_workers(worker_count)
+    logger.info("Task queue workers started: %s", worker_count)
 
-    await bot.session.close()
+    try:
+        logger.info("Starting aiogram polling loop.")
+        await dispatcher.start_polling(bot)
+    finally:
+        await task_queue.shutdown()
+        await bot.session.close()
 
 
 async def main() -> None:

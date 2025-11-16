@@ -1,8 +1,17 @@
 """Whisper transcription engine wrapper."""
 from __future__ import annotations
 
+import argparse
+import logging
+import os
+import time
 from pathlib import Path
+from threading import Lock
 from typing import Any
+
+import whisper
+
+logger = logging.getLogger("bot.whisper")
 
 
 class WhisperEngine:
@@ -13,11 +22,60 @@ class WhisperEngine:
 
         self.model_name = model_name
         self.cache_dir = cache_dir
+        self._model: Any | None = None
+        self._lock = Lock()
 
-    def transcribe(self, audio_path: Path) -> str:
-        """Transcribe the provided audio file using the configured Whisper model.
+    def _load_model(self) -> Any:
+        if self._model is None:
+            with self._lock:
+                if self._model is None:
+                    self.cache_dir.mkdir(parents=True, exist_ok=True)
+                    logger.info("Loading Whisper model %s", self.model_name)
+                    self._model = whisper.load_model(self.model_name, download_root=str(self.cache_dir))
+        return self._model
 
-        TODO: Load Whisper model lazily and run transcription with caching support.
-        """
+    def transcribe(self, audio_path: Path, *, language: str | None = None, temperature: float | None = None) -> str:
+        """Transcribe the provided audio file using the configured Whisper model."""
 
-        raise NotImplementedError("Whisper transcription is not yet implemented.")
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio file for transcription not found: {audio_path}")
+
+        model = self._load_model()
+        options: dict[str, Any] = {}
+        if language:
+            options["language"] = language
+        if temperature is not None:
+            options["temperature"] = temperature
+
+        start = time.perf_counter()
+        result = model.transcribe(str(audio_path), **options)
+        duration = time.perf_counter() - start
+        logger.info("Whisper transcription finished in %.2fs", duration)
+
+        text = result.get("text", "") if isinstance(result, dict) else str(result)
+        return text.strip()
+
+
+def _cli() -> None:
+    parser = argparse.ArgumentParser(description="Run Whisper transcription standalone.")
+    parser.add_argument("--audio", required=True, type=Path, help="Path to the WAV audio file.")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("WHISPER_MODEL", "medium"),
+        help="Name of the Whisper model to use (default from WHISPER_MODEL env).",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=Path("models/whisper_cache"),
+        help="Directory used to cache Whisper models.",
+    )
+    args = parser.parse_args()
+
+    engine = WhisperEngine(model_name=args.model, cache_dir=args.cache_dir)
+    text = engine.transcribe(args.audio)
+    print(text)
+
+
+if __name__ == "__main__":
+    _cli()

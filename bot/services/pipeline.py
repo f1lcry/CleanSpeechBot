@@ -1,7 +1,10 @@
 """Voice message processing pipeline."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+import uuid
 from pathlib import Path
 
 from bot.utils.audio import AudioProcessor
@@ -10,6 +13,8 @@ from bot.utils.whisper_engine import WhisperEngine
 from bot.utils.workers import TaskQueueManager
 
 logger = logging.getLogger("bot.pipeline")
+
+_FALLBACK_RESPONSE = "Не удалось обработать голосовое сообщение, попробуйте позже."
 
 
 class VoicePipeline:
@@ -30,32 +35,39 @@ class VoicePipeline:
         self.task_queue = task_queue
 
     async def process_voice(self, audio_path: Path) -> str:
-        """Process a voice message through the entire pipeline and return formatted text.
+        """Process a voice message through the entire pipeline and return formatted text."""
 
-        TODO: Implement proper task scheduling, error handling, and resource cleanup.
-        """
+        loop = asyncio.get_running_loop()
+        result_future: asyncio.Future[str] = loop.create_future()
 
-        logger.info("Starting voice processing for: %s", audio_path)
+        async def runner() -> None:
+            try:
+                result = await self._run_job(audio_path)
+            except Exception:  # pragma: no cover - safeguarded by _run_job.
+                logger.exception("Voice pipeline job raised unexpectedly.")
+                result = _FALLBACK_RESPONSE
+            if not result_future.done():
+                result_future.set_result(result)
+
+        await self.task_queue.enqueue(lambda: runner())
+        return await result_future
+
+    async def _run_job(self, audio_path: Path) -> str:
+        job_id = uuid.uuid4().hex
+        start = time.perf_counter()
+        converted_path: Path | None = None
 
         try:
             converted_path = self.audio_processor.convert_to_wav(source_path=audio_path)
             self.audio_processor.validate_audio(audio_path=converted_path)
-        except NotImplementedError:
-            logger.debug("Audio processing is not yet implemented.")
-            converted_path = audio_path
-
-        try:
             transcript = self.whisper_engine.transcribe(audio_path=converted_path)
-        except NotImplementedError:
-            logger.debug("Whisper transcription is not yet implemented.")
-            transcript = ""
-
-        try:
             formatted_text = await self.formatting_client.format_text(text=transcript)
-        except NotImplementedError:
-            logger.debug("LLM formatting is not yet implemented.")
-            formatted_text = transcript or "[transcription pending]"
-
-        # TODO: Integrate TaskQueueManager to process the above steps asynchronously.
-        logger.info("Voice processing completed with placeholder result.")
-        return formatted_text
+            duration = time.perf_counter() - start
+            logger.info("Voice pipeline job %s finished in %.2fs", job_id, duration)
+            return formatted_text or _FALLBACK_RESPONSE
+        except Exception as exc:
+            logger.exception("Voice pipeline job %s failed: %s", job_id, exc)
+            return _FALLBACK_RESPONSE
+        finally:
+            if converted_path is not None:
+                self.audio_processor.cleanup(converted_path)

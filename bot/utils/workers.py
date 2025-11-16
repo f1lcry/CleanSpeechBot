@@ -42,11 +42,13 @@ class TaskQueueManager:
         while not self._shutdown_event.is_set():
             try:
                 task_factory = await self.queue.get()
-                logger.info("Worker %s processing task", worker_id)
-                await self._execute_task(task_factory)
             except asyncio.CancelledError:
                 logger.info("Worker %s received cancellation.", worker_id)
                 break
+
+            try:
+                logger.info("Worker %s processing task", worker_id)
+                await self._execute_task(task_factory)
             except Exception as exc:  # TODO: narrow down exception handling when logic is implemented.
                 logger.exception("Worker %s encountered an error: %s", worker_id, exc)
             finally:
@@ -62,6 +64,8 @@ class TaskQueueManager:
         """Request graceful shutdown of workers and wait for completion."""
 
         logger.info("Shutdown initiated for task queue manager.")
+
+        await self.queue.join()
         self._shutdown_event.set()
 
         for worker in self._workers:
