@@ -1,6 +1,6 @@
 aiogram==3.4.1
 numpy<2
 ollama==0.1.9
-openai-whisper==20231117
+openai-whisper==20250625
 python-dotenv==1.0.1
 torch==2.1.2

@@ -5,6 +5,7 @@ import logging
 import ssl
 import threading
 import time
+import warnings
 import wave
 from contextlib import closing
 from pathlib import Path
@@ -45,7 +46,9 @@ class WhisperEngine:
         self._model: Any | None = None
         self._model_lock = threading.Lock()
         self._ssl_context_lock = threading.Lock()
+        self._runtime_lock = threading.Lock()
         self._ssl_context_installed = False
+        self._warnings_configured = False
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         if self.ssl_cert_file is not None and not self.ssl_cert_file.is_file():
@@ -90,6 +93,7 @@ class WhisperEngine:
             if self._model is None:
                 try:
                     self._install_ssl_context()
+                    self._configure_runtime()
                     logger.info(
                         "Loading Whisper model '%s' (device=%s, cache=%s)",
                         self.model_name,
@@ -118,6 +122,31 @@ class WhisperEngine:
                     ) from exc
 
         return self._model
+
+    def _configure_runtime(self) -> None:
+        """Suppress noisy warnings emitted by upstream libraries once per process."""
+
+        if self._warnings_configured:
+            return
+
+        with self._runtime_lock:
+            if self._warnings_configured:
+                return
+
+            warnings.filterwarnings(
+                "ignore",
+                message="TypedStorage is deprecated",
+                category=UserWarning,
+                module="torch._utils",
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="FP16 is not supported on CPU; using FP32 instead",
+                category=UserWarning,
+                module="whisper.transcribe",
+            )
+
+            self._warnings_configured = True
 
     def _read_duration(self, audio_path: Path) -> float:
         """Return duration of the wav file in seconds for logging."""
