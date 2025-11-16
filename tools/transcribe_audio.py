@@ -18,7 +18,7 @@ from tools._env import REPO_ROOT
 from bot.utils.whisper_engine import WhisperEngine
 
 
-DEFAULT_AUDIO_ROOT = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer"))
+DEFAULT_AUDIO_ROOT = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/cleanspeechbot"))
 # Conversion utilities and the runtime pipeline both write WAV files directly into
 # AUDIO_TMP_DIR. Keep the CLI default aligned so users can run convert ->
 # transcribe without overriding flags.

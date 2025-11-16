@@ -1,4 +1,4 @@
-# BotSummarizer
+# CleanSpeechBot
 
 Telegram-бот для локальной обработки голосовых сообщений и выдачи отформатированного текста. Сейчас бот полностью функционирует в личных чатах Telegram: получает голосовые сообщения, прогоняет их через локальный конвейер (FFmpeg → Whisper → Llama 3.1 через Ollama) и возвращает компактное саммари пользователю. README служит единым источником правды о проекте: архитектура, пайплайн, требования, статус реализации и планы.
 
@@ -140,7 +140,7 @@ project_root/
    WHISPER_CACHE_DIR=./models/whisper_cache
    WHISPER_CA_BUNDLE=/etc/ssl/certs/corporate-ca.pem
    WHISPER_INSECURE_SSL=false
-   AUDIO_TMP_DIR=/tmp/botsummarizer
+   AUDIO_TMP_DIR=/tmp/cleanspeechbot
    TASK_QUEUE_LIMIT=2
    ```
 
@@ -201,7 +201,7 @@ CLI `tools/transcribe_audio.py` оборачивает `WhisperEngine` и исп
 
   ```bash
   python tools/transcribe_audio.py
-  python tools/transcribe_audio.py --input /tmp/botsummarizer/voice.wav --language ru --device cpu
+  python tools/transcribe_audio.py --input /tmp/cleanspeechbot/voice.wav --language ru --device cpu
   ```
 
 ## Модуль форматирования
