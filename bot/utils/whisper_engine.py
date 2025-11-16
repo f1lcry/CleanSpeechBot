@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import logging
+import ssl
 import threading
 import time
 import wave
 from contextlib import closing
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import HTTPSHandler, build_opener, install_opener
 
 import whisper
 
@@ -26,6 +29,8 @@ class WhisperEngine:
         language: str | None = None,
         temperature: float = 0.0,
         device: str | None = None,
+        ssl_cert_file: Path | None = None,
+        allow_insecure_ssl: bool = False,
     ) -> None:
         """Initialize the engine configuration without loading the model eagerly."""
 
@@ -34,10 +39,46 @@ class WhisperEngine:
         self.language = language
         self.temperature = temperature
         self.device = device
+        self.ssl_cert_file = Path(ssl_cert_file).expanduser() if ssl_cert_file else None
+        self.allow_insecure_ssl = allow_insecure_ssl
 
         self._model: Any | None = None
         self._model_lock = threading.Lock()
+        self._ssl_context_lock = threading.Lock()
+        self._ssl_context_installed = False
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.ssl_cert_file is not None and not self.ssl_cert_file.is_file():
+            raise FileNotFoundError(
+                f"Configured Whisper SSL certificate bundle does not exist: {self.ssl_cert_file}"
+            )
+
+    def _install_ssl_context(self) -> None:
+        """Install a custom SSL context when certificates need overriding."""
+
+        if self._ssl_context_installed:
+            return
+
+        if not (self.ssl_cert_file or self.allow_insecure_ssl):
+            return
+
+        with self._ssl_context_lock:
+            if self._ssl_context_installed:
+                return
+
+            if self.allow_insecure_ssl:
+                logger.warning(
+                    "Using insecure SSL context for Whisper downloads. Certificates will not be verified."
+                )
+                context = ssl._create_unverified_context()
+            else:
+                logger.info("Installing custom SSL CA bundle for Whisper downloads: %s", self.ssl_cert_file)
+                context = ssl.create_default_context(cafile=str(self.ssl_cert_file))
+
+            https_handler = HTTPSHandler(context=context)
+            opener = build_opener(https_handler)
+            install_opener(opener)
+            self._ssl_context_installed = True
 
     def _ensure_model(self) -> Any:
         """Load the Whisper model lazily in a thread-safe fashion."""
@@ -48,6 +89,7 @@ class WhisperEngine:
         with self._model_lock:
             if self._model is None:
                 try:
+                    self._install_ssl_context()
                     logger.info(
                         "Loading Whisper model '%s' (device=%s, cache=%s)",
                         self.model_name,
@@ -61,7 +103,19 @@ class WhisperEngine:
                     )
                 except Exception as exc:  # noqa: BLE001 - surface real initialization issues
                     logger.exception("Failed to initialize Whisper model: %s", exc)
-                    raise RuntimeError(f"Failed to load Whisper model '{self.model_name}'.") from exc
+                    download_hint = ""
+                    underlying = exc
+                    if isinstance(exc, URLError):
+                        underlying = exc.reason or exc
+                    if isinstance(underlying, ssl.SSLError):
+                        download_hint = (
+                            " SSL handshake failed. Provide a trusted CA bundle via WHISPER_CA_BUNDLE "
+                            "or rerun the CLI with --ca-bundle/--insecure-ssl."
+                        )
+
+                    raise RuntimeError(
+                        f"Failed to load Whisper model '{self.model_name}'.{download_hint}"
+                    ) from exc
 
         return self._model
 

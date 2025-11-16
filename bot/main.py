@@ -30,6 +30,11 @@ async def bootstrap() -> None:
     whisper_engine = WhisperEngine(
         model_name=config.whisper_model,
         cache_dir=config.audio_tmp_dir,
+        language=config.whisper_language,
+        temperature=config.whisper_temperature,
+        device=config.whisper_device,
+        ssl_cert_file=config.whisper_ca_bundle,
+        allow_insecure_ssl=config.whisper_insecure_ssl,
     )
     formatting_client = FormattingLLMClient(host=config.ollama_host, model="llama3.1-8b")
     task_queue = TaskQueueManager(maxsize=config.task_queue_limit)

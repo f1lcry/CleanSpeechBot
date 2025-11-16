@@ -114,6 +114,12 @@ project_root/
    WHISPER_MODEL=medium
    AUDIO_TMP_DIR=/tmp/botsummarizer
    TASK_QUEUE_LIMIT=2
+   # Опционально: тонкая настройка Whisper
+   WHISPER_LANGUAGE=ru
+   WHISPER_TEMPERATURE=0.0
+   WHISPER_DEVICE=cpu
+   WHISPER_CA_BUNDLE=/etc/ssl/certs/corporate-ca.pem
+   WHISPER_INSECURE_SSL=false
    ```
 
 4. **Установка зависимостей**
@@ -124,7 +130,7 @@ project_root/
    pip install -r requirements.txt
    ```
 
-   `requirements.txt` тянет все необходимые Python-библиотеки: `aiogram`, `python-dotenv`, `ollama`, а также аудио-стек (`openai-whisper`, `torch==2.1.2`, `numpy<2`). Whisper подгружается локально — отдельного шага установки не требуется, модель скачивается автоматически в директорию кэша при первом запуске.
+   `requirements.txt` тянет все необходимые Python-библиотеки: `aiogram`, `python-dotenv`, `ollama`, а также аудио-стек (`openai-whisper`, `torch==2.1.2`, `numpy<2`). Whisper подгружается локально — отдельного шага установки не требуется, модель скачивается автоматически в директорию кэша при первом запуске. Если корпоративная сеть подменяет SSL-сертификаты, укажите путь к корневому сертификату через `WHISPER_CA_BUNDLE` (или CLI-параметр `--ca-bundle`). В крайнем случае доступно отключение проверки (`WHISPER_INSECURE_SSL=true` или `--insecure-ssl`).
 
 5. **Запуск в разработке**
 
@@ -191,11 +197,13 @@ project_root/
 
 - **Запуск с явным путём и параметрами модели**:
 
-  ```bash
-  python tools/transcribe_audio.py --input /tmp/botsummarizer/Temporary/voice.wav --model medium --language ru
-  ```
+```bash
+python tools/transcribe_audio.py --input /tmp/botsummarizer/Temporary/voice.wav --model medium --language ru --ca-bundle ~/certs/corp.pem
+```
 
-  Вывод аналогичен: в stdout появится строка `[TRANSCRIPT] ...`, а логирование расскажет о загрузке модели, длительности аудио и выбранных параметрах. Ошибки (отсутствует файл, нет WAV, проблемы с моделью) приводят к сообщению `[ERROR] Transcription failed: ...` и завершению с кодом `1`.
+Вывод аналогичен: в stdout появится строка `[TRANSCRIPT] ...`, а логирование расскажет о загрузке модели, длительности аудио и выбранных параметрах. Ошибки (отсутствует файл, нет WAV, проблемы с моделью) приводят к сообщению `[ERROR] Transcription failed: ...` и завершению с кодом `1`.
+
+Если при скачивании модели возникает `SSL: CERTIFICATE_VERIFY_FAILED`, воспользуйтесь параметром `--ca-bundle` или переменной `WHISPER_CA_BUNDLE`, чтобы передать корпоративный сертификат. Флаг `--insecure-ssl` (или `WHISPER_INSECURE_SSL=true`) отключает проверку, но подходит только как временный обходной путь.
 
 Перед запуском убедитесь, что WAV-файл уже подготовлен (через `tools/convert_audio.py` или другой совместимый способ) и лежит в директории `Temporary`.
 

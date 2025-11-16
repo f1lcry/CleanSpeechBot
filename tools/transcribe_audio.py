@@ -18,6 +18,13 @@ DEFAULT_AUDIO_ROOT = Path(os.environ.get("AUDIO_TMP_DIR", "/tmp/botsummarizer"))
 DEFAULT_TMP_DIR = DEFAULT_AUDIO_ROOT / "Temporary"
 DEFAULT_MODEL = os.environ.get("WHISPER_MODEL", "base")
 DEFAULT_CACHE_DIR = Path(os.environ.get("WHISPER_CACHE_DIR", REPO_ROOT / "models/whisper_cache"))
+DEFAULT_CA_BUNDLE = os.environ.get("WHISPER_CA_BUNDLE")
+DEFAULT_INSECURE_SSL = os.environ.get("WHISPER_INSECURE_SSL", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,6 +80,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable debug logging output.",
     )
+    parser.add_argument(
+        "--ca-bundle",
+        type=Path,
+        default=Path(DEFAULT_CA_BUNDLE).expanduser() if DEFAULT_CA_BUNDLE else None,
+        help="Optional CA bundle for verifying Whisper download SSL certificates.",
+    )
+    parser.add_argument(
+        "--insecure-ssl",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_INSECURE_SSL,
+        help="Disable SSL verification when downloading Whisper models (use as a last resort).",
+    )
     return parser
 
 
@@ -122,6 +141,8 @@ def main() -> int:
             language=args.language,
             temperature=args.temperature,
             device=args.device,
+            ssl_cert_file=args.ca_bundle,
+            allow_insecure_ssl=args.insecure_ssl,
         )
         transcript = engine.transcribe(audio_path=audio_path)
     except Exception as exc:  # noqa: BLE001 - bubble up to the CLI output
