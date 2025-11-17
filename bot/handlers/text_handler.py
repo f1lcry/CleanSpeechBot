@@ -12,7 +12,11 @@ text_router = Router(name="text_router")
 async def handle_start(message: Message) -> None:
     """Describe the bot workflow when /start is received."""
 
-    await message.answer("Привет! Пришли голосовое — получишь summary.")
+    await message.answer(
+        "Этот бот превращает голосовые и аудио-сообщения в краткие саммари."
+        " После отправки записи нажмите кнопку \"Сделать саммари\" под сообщением —"
+        " только тогда начнётся обработка."
+    )
 
 
 @text_router.message(F.text)

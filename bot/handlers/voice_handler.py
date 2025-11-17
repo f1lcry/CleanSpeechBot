@@ -3,14 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional
 from uuid import uuid4
 
-from pathlib import Path
-
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import Document, Message
+from aiogram.types import (
+    CallbackQuery,
+    Document,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot.services.pipeline import (
     AudioConversionError,
@@ -24,6 +31,27 @@ from bot.services.pipeline import (
 voice_router = Router(name="voice_router")
 _PIPELINE: Optional[VoicePipeline] = None
 logger = logging.getLogger("bot.voice_handler")
+
+
+@dataclass
+class PendingVoiceRequest:
+    chat_id: int
+    message_id: int
+    file_id: str
+    mime_type: str | None
+    extension_hint: str | None
+    log_label: str
+    created_at: float
+    in_progress: bool = False
+
+
+_PENDING_REQUESTS: Dict[str, PendingVoiceRequest] = {}
+_PENDING_LOCK = asyncio.Lock()
+_REQUEST_TTL_SECONDS = 900  # 15 minutes
+_SUMMARY_PREFIX = "summary:"
+_SUMMARY_DONE_DATA = "summary_done"
+_SUMMARY_BUTTON_TEXT = "Сделать саммари"
+_SUMMARY_LOCKED_TEXT = "Уже обрабатывается/готово"
 
 
 def configure_pipeline(pipeline: VoicePipeline) -> None:
@@ -57,7 +85,7 @@ async def handle_voice_message(message: Message) -> None:
     if voice is None:  # pragma: no cover - safeguarded by filter
         return
 
-    await _handle_audio_content(
+    await _queue_summary_request(
         message=message,
         file_id=voice.file_id,
         mime_type=voice.mime_type,
@@ -74,7 +102,7 @@ async def handle_audio_file(message: Message) -> None:
         return
 
     extension_hint = Path(audio.file_name).suffix if audio.file_name else None
-    await _handle_audio_content(
+    await _queue_summary_request(
         message=message,
         file_id=audio.file_id,
         mime_type=audio.mime_type,
@@ -95,7 +123,7 @@ async def handle_audio_document(message: Message) -> None:
         return
 
     extension_hint = Path(document.file_name).suffix if document.file_name else None
-    await _handle_audio_content(
+    await _queue_summary_request(
         message=message,
         file_id=document.file_id,
         mime_type=document.mime_type,
@@ -116,7 +144,7 @@ def _is_audio_document(document: Document) -> bool:
     return False
 
 
-async def _handle_audio_content(
+async def _queue_summary_request(
     *,
     message: Message,
     file_id: str,
@@ -124,40 +152,211 @@ async def _handle_audio_content(
     log_label: str,
     extension_hint: str | None = None,
 ) -> None:
-    """Download and process a Telegram media file representing audio content."""
+    """Store a pending request and show an inline button to trigger processing."""
 
     if _PIPELINE is None:
         raise RuntimeError("Voice pipeline is not configured.")
 
-    bot = message.bot
     chat_id = message.chat.id
+    request = PendingVoiceRequest(
+        chat_id=chat_id,
+        message_id=message.message_id,
+        file_id=file_id,
+        mime_type=mime_type,
+        extension_hint=extension_hint,
+        log_label=log_label,
+        created_at=time.time(),
+    )
+    key = _make_request_key(chat_id, message.message_id)
+
+    async with _PENDING_LOCK:
+        _cleanup_expired_requests_locked(now=request.created_at)
+        _PENDING_REQUESTS[key] = request
+
     logger.info(
-        "%s received: chat_id=%s message_id=%s",
-        log_label,
+        "Pending summary request stored: chat_id=%s message_id=%s log_label=%s",
         chat_id,
         message.message_id,
+        log_label,
+    )
+    keyboard = _build_summary_keyboard(key)
+    await message.reply(
+        "Нажмите кнопку, чтобы получить саммари",
+        reply_markup=keyboard,
+    )
+
+
+def _make_request_key(chat_id: int, message_id: int) -> str:
+    return f"{chat_id}:{message_id}"
+
+
+def _cleanup_expired_requests_locked(*, now: float | None = None) -> None:
+    now = now or time.time()
+    expired_keys = [
+        key
+        for key, request in _PENDING_REQUESTS.items()
+        if now - request.created_at > _REQUEST_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        request = _PENDING_REQUESTS.pop(key, None)
+        if request is None:
+            continue
+        logger.info(
+            "Expired pending request: chat_id=%s message_id=%s",
+            request.chat_id,
+            request.message_id,
+        )
+
+
+def _build_summary_keyboard(key: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_SUMMARY_BUTTON_TEXT,
+                    callback_data=f"{_SUMMARY_PREFIX}{key}",
+                )
+            ]
+        ]
+    )
+
+
+def _build_locked_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_SUMMARY_LOCKED_TEXT,
+                    callback_data=_SUMMARY_DONE_DATA,
+                )
+            ]
+        ]
+    )
+
+
+async def _mark_button_in_progress(message: Message | None) -> None:
+    if message is None:
+        return
+    try:
+        await message.edit_reply_markup(reply_markup=_build_locked_keyboard())
+    except TelegramAPIError:
+        logger.debug("Failed to update inline keyboard for message_id=%s", message.message_id)
+
+
+async def _remove_keyboard(message: Message | None) -> None:
+    if message is None:
+        return
+    try:
+        await message.edit_reply_markup(reply_markup=None)
+    except TelegramAPIError:
+        logger.debug("Failed to remove inline keyboard for message_id=%s", message.message_id)
+
+
+@voice_router.callback_query(F.data == _SUMMARY_DONE_DATA)
+async def handle_locked_summary(callback: CallbackQuery) -> None:
+    """Gracefully acknowledge callbacks on disabled keyboards."""
+
+    await callback.answer("Запрос уже обработан.")
+
+
+@voice_router.callback_query(F.data.startswith(_SUMMARY_PREFIX))
+async def handle_summary_callback(callback: CallbackQuery) -> None:
+    """Trigger processing when the inline button is pressed."""
+
+    key = (callback.data or "")[len(_SUMMARY_PREFIX) :]
+    message = callback.message
+    if not key or message is None:
+        await callback.answer("Сообщение не найдено.")
+        return
+
+    async with _PENDING_LOCK:
+        _cleanup_expired_requests_locked()
+        request = _PENDING_REQUESTS.get(key)
+        if request is None:
+            logger.info("Missing pending request for key=%s", key)
+            await callback.answer("Запрос не найден или истёк.")
+            await _mark_button_in_progress(message)
+            return
+        if request.in_progress:
+            logger.info(
+                "Request already running: chat_id=%s message_id=%s",
+                request.chat_id,
+                request.message_id,
+            )
+            await callback.answer("Этот запрос уже обрабатывается.")
+            await _mark_button_in_progress(message)
+            return
+        request.in_progress = True
+
+    await _mark_button_in_progress(message)
+    await callback.answer("Запускаю обработку...")
+    try:
+        await _process_voice_request(bot=callback.bot, request=request)
+    finally:
+        async with _PENDING_LOCK:
+            removed = _PENDING_REQUESTS.pop(key, None)
+            if removed is not None:
+                logger.info(
+                    "Request completed: chat_id=%s message_id=%s",
+                    removed.chat_id,
+                    removed.message_id,
+                )
+    await _remove_keyboard(message)
+
+
+async def _process_voice_request(*, bot: Bot, request: PendingVoiceRequest) -> None:
+    """Download the file and run the voice pipeline."""
+
+    if _PIPELINE is None:
+        raise RuntimeError("Voice pipeline is not configured.")
+
+    chat_id = request.chat_id
+    message_id = request.message_id
+    logger.info(
+        "Processing pending request: chat_id=%s message_id=%s", chat_id, message_id
     )
 
     tmp_dir = _PIPELINE.tmp_dir
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    extension = _normalize_extension(extension_hint) or _detect_extension(mime_type)
+    extension = _normalize_extension(request.extension_hint) or _detect_extension(
+        request.mime_type
+    )
     download_path = tmp_dir / (
-        f"{log_label}_{chat_id}_{message.message_id}_{uuid4().hex}{extension}"
+        f"{request.log_label}_{chat_id}_{message_id}_{uuid4().hex}{extension}"
     )
 
     try:
-        await bot.download(file_id, destination=download_path)
+        await bot.download(request.file_id, destination=download_path)
         logger.info("Audio saved to %s", download_path)
-    except TelegramAPIError as exc:
-        logger.exception("Failed to download %s %s", log_label, file_id)
-        await message.answer("Не удалось скачать аудио. Попробуйте позже.")
+    except TelegramAPIError:
+        logger.exception(
+            "Failed to download %s %s", request.log_label, request.file_id
+        )
+        await bot.send_message(
+            chat_id,
+            "Не удалось скачать аудио. Попробуйте позже.",
+            reply_to_message_id=message_id,
+        )
         return
-    except Exception as exc:  # noqa: BLE001 - unexpected download issues
-        logger.exception("Unexpected error while downloading %s %s", log_label, file_id)
-        await message.answer("Произошла ошибка при загрузке аудио-файла.")
+    except Exception:  # noqa: BLE001 - unexpected download issues
+        logger.exception(
+            "Unexpected error while downloading %s %s",
+            request.log_label,
+            request.file_id,
+        )
+        await bot.send_message(
+            chat_id,
+            "Произошла ошибка при загрузке аудио-файла.",
+            reply_to_message_id=message_id,
+        )
         return
 
-    await _process_downloaded_audio(message, download_path)
+    await _process_downloaded_audio(
+        bot=bot,
+        chat_id=chat_id,
+        reply_to_message_id=message_id,
+        download_path=download_path,
+    )
 
 
 def _normalize_extension(extension: str | None) -> str | None:
@@ -171,7 +370,9 @@ def _normalize_extension(extension: str | None) -> str | None:
     return extension
 
 
-async def _process_downloaded_audio(message: Message, download_path: Path) -> None:
+async def _process_downloaded_audio(
+    *, bot: Bot, chat_id: int, reply_to_message_id: int, download_path: Path
+) -> None:
     if _PIPELINE is None:
         raise RuntimeError("Voice pipeline is not configured.")
 
@@ -186,15 +387,27 @@ async def _process_downloaded_audio(message: Message, download_path: Path) -> No
         logger.info("Voice pipeline completed for %s", download_path.name)
     except (AudioConversionError, AudioValidationError) as exc:
         logger.warning("Audio preparation failed for %s: %s", download_path.name, exc)
-        await message.answer("Аудио-файл нельзя обработать. Попробуйте записать новое сообщение.")
+        await bot.send_message(
+            chat_id,
+            "Аудио-файл нельзя обработать. Попробуйте записать новое сообщение.",
+            reply_to_message_id=reply_to_message_id,
+        )
         return
     except (TranscriptionError, FormattingError, VoicePipelineError) as exc:
         logger.warning("Pipeline failed for %s: %s", download_path.name, exc)
-        await message.answer(pipeline_error_reply)
+        await bot.send_message(
+            chat_id,
+            pipeline_error_reply,
+            reply_to_message_id=reply_to_message_id,
+        )
         return
     except Exception:
         logger.exception("Unhandled pipeline error for %s", download_path.name)
-        await message.answer(pipeline_error_reply)
+        await bot.send_message(
+            chat_id,
+            pipeline_error_reply,
+            reply_to_message_id=reply_to_message_id,
+        )
         return
     finally:
         await asyncio.to_thread(_PIPELINE.audio_processor.cleanup, download_path)
@@ -203,4 +416,8 @@ async def _process_downloaded_audio(message: Message, download_path: Path) -> No
     if not text:
         text = "Похоже, голосовое пустое. Запиши сообщение ещё раз."
 
-    await message.answer(text)
+    await bot.send_message(
+        chat_id,
+        text,
+        reply_to_message_id=reply_to_message_id,
+    )
