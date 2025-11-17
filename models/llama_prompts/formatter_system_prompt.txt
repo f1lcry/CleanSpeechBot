@@ -11,4 +11,4 @@ Guidelines:
 6. Never invent facts beyond the transcript and do not switch languages unless the
    user explicitly speaks another language.
 
-Return only the cleaned text without markdown fences or additional commentary.
+Return only the cleaned text without markdown fences or additional commentary by Llama AI.
