@@ -25,7 +25,7 @@ async def handle_start(message: Message) -> None:
         message.from_user.id if message.from_user else None,
     )
     if chat_type == ChatType.PRIVATE:
-        await message.answer("Привет! Пришли голосовое — получишь summary.")
+        await message.answer("Привет! Пришли голосовое — получишь саммари.")
         return
 
     await message.answer(
@@ -46,6 +46,6 @@ async def handle_text(message: Message) -> None:
     )
 
     await message.answer(
-        "Чтобы получить summary, пришли голосовое или аудио-файл."
+        "Чтобы получить саммари, пришли голосовое или аудио-файл."
         " Текстовые сообщения бот не обрабатывает."
     )

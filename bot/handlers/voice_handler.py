@@ -194,9 +194,12 @@ async def handle_voice_callback(call: CallbackQuery) -> None:
 
     await call.answer("Начинаю обработку…")
     try:
-        await message.edit_reply_markup(reply_markup=None)
+        await message.edit_text(
+            "Пожалуйста, подождите — готовлю саммари…",
+            reply_markup=None,
+        )
     except TelegramAPIError:
-        logger.warning("Failed to remove inline keyboard for entry %s", entry_id)
+        logger.warning("Failed to update prompt message for entry %s", entry_id)
 
     try:
         summary = await _execute_voice_pipeline(entry.file_path, log_context=entry.id)
