@@ -33,6 +33,8 @@ voice_router = Router(name="voice_router")
 _PIPELINE: Optional[VoicePipeline] = None
 logger = logging.getLogger("bot.voice_handler")
 
+_MIN_VOICE_DURATION_SECONDS = 1
+
 
 @dataclass
 class PendingVoiceRequest:
@@ -78,22 +80,45 @@ def _detect_extension(mime_type: str | None) -> str:
     return mapping.get(mime_type, ".ogg")
 
 
-@voice_router.message(
-    F.content_type.in_(
-        {ContentType.VOICE, ContentType.AUDIO, ContentType.DOCUMENT}
-    )
-)
-async def handle_audio_like_messages(message: Message) -> None:
-    """Handle all message types that can contain audio needing a summary."""
+@voice_router.message(content_types=[ContentType.VOICE])
+async def handle_voice_messages(message: Message) -> None:
+    """Handle Telegram voice messages (opus-in-ogg)."""
 
-    if message.content_type == ContentType.VOICE and message.voice:
-        await _queue_summary_request(
-            message=message,
-            file_id=message.voice.file_id,
-            mime_type=message.voice.mime_type,
-            log_label="voice",
+    voice = message.voice
+    if voice is None:
+        logger.debug(
+            "Voice handler invoked without voice payload: chat_id=%s message_id=%s",
+            message.chat.id,
+            message.message_id,
         )
         return
+
+    duration = voice.duration or 0
+    logger.info(
+        "Received voice: chat_id=%s message_id=%s file_id=%s duration=%ss",
+        message.chat.id,
+        message.message_id,
+        voice.file_id,
+        duration,
+    )
+
+    if duration < _MIN_VOICE_DURATION_SECONDS:
+        await message.reply("Слишком короткое сообщение, попробуйте записать длиннее.")
+        return
+
+    await _queue_summary_request(
+        message=message,
+        file_id=voice.file_id,
+        mime_type=voice.mime_type,
+        log_label="voice",
+    )
+
+
+@voice_router.message(
+    F.content_type.in_({ContentType.AUDIO, ContentType.DOCUMENT})
+)
+async def handle_audio_like_messages(message: Message) -> None:
+    """Handle message types that can contain audio needing a summary."""
 
     if message.content_type == ContentType.AUDIO and message.audio:
         audio = message.audio
