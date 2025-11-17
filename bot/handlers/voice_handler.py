@@ -3,14 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Literal, Optional
 from uuid import uuid4
 
-from pathlib import Path
-
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError
-from aiogram.types import Document, Message
+from aiogram.types import (
+    CallbackQuery,
+    Document,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot.services.pipeline import (
     AudioConversionError,
@@ -25,28 +33,154 @@ voice_router = Router(name="voice_router")
 _PIPELINE: Optional[VoicePipeline] = None
 logger = logging.getLogger("bot.voice_handler")
 
+PendingVoiceStatus = Literal["pending", "processing"]
+
+
+@dataclass
+class PendingGroupVoice:
+    """Metadata describing a pending voice message in a group chat."""
+
+    id: str
+    chat_id: int
+    voice_message_id: int
+    reply_to_message_id: int | None
+    file_path: Path
+    initiator_id: int | None
+    status: PendingVoiceStatus = "pending"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def is_expired(self, ttl: timedelta) -> bool:
+        return datetime.now(timezone.utc) - self.created_at >= ttl
+
+
+class PendingVoiceStore:
+    """In-memory storage for delayed group voice processing."""
+
+    def __init__(self, *, ttl: timedelta, cleanup_interval: int = 60) -> None:
+        self._ttl = ttl
+        self._cleanup_interval = cleanup_interval
+        self._items: dict[str, PendingGroupVoice] = {}
+        self._lock = asyncio.Lock()
+        self._cleanup_task: asyncio.Task[None] | None = None
+
+    @property
+    def ttl(self) -> timedelta:
+        return self._ttl
+
+    async def add(self, entry: PendingGroupVoice) -> None:
+        async with self._lock:
+            self._items[entry.id] = entry
+
+    async def get(self, entry_id: str) -> PendingGroupVoice | None:
+        async with self._lock:
+            return self._items.get(entry_id)
+
+    async def pop(self, entry_id: str) -> PendingGroupVoice | None:
+        async with self._lock:
+            return self._items.pop(entry_id, None)
+
+    async def mark_processing(self, entry_id: str) -> bool:
+        async with self._lock:
+            entry = self._items.get(entry_id)
+            if entry is None or entry.status != "pending":
+                return False
+            entry.status = "processing"
+            return True
+
+    async def cleanup_expired(self) -> list[PendingGroupVoice]:
+        threshold = datetime.now(timezone.utc) - self._ttl
+        expired: list[PendingGroupVoice] = []
+        async with self._lock:
+            for entry_id, entry in list(self._items.items()):
+                if entry.created_at <= threshold and entry.status != "processing":
+                    expired.append(self._items.pop(entry_id))
+        return expired
+
+    def ensure_cleanup_task(self) -> None:
+        if self._cleanup_task and not self._cleanup_task.done():
+            return
+        loop = asyncio.get_running_loop()
+        self._cleanup_task = loop.create_task(self._cleanup_loop())
+
+    async def _cleanup_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self._cleanup_interval)
+                expired = await self.cleanup_expired()
+                for entry in expired:
+                    logger.info(
+                        "Pending voice %s expired in chat %s", entry.id, entry.chat_id
+                    )
+                    await _cleanup_file(entry.file_path)
+        except asyncio.CancelledError:  # pragma: no cover - graceful shutdown
+            logger.info("Pending voice cleanup loop cancelled")
+            raise
+
+
+_PENDING_STORE = PendingVoiceStore(ttl=timedelta(minutes=10), cleanup_interval=90)
+_CALLBACK_PREFIX = "gv:"
+
 
 def configure_pipeline(pipeline: VoicePipeline) -> None:
     """Attach a pipeline instance used for handling voice messages."""
 
     global _PIPELINE
     _PIPELINE = pipeline
+    _PENDING_STORE.ensure_cleanup_task()
 
 
-def _detect_extension(mime_type: str | None) -> str:
-    mapping = {
-        "audio/ogg": ".ogg",
-        "audio/oga": ".oga",
-        "audio/x-opus+ogg": ".ogg",
-        "audio/mpeg": ".mp3",
-        "audio/mp3": ".mp3",
-        "audio/wav": ".wav",
-        "audio/x-wav": ".wav",
-    }
-    if not mime_type:
-        return ".ogg"
-    mime_type = mime_type.lower()
-    return mapping.get(mime_type, ".ogg")
+@voice_router.callback_query(F.data.startswith(_CALLBACK_PREFIX))
+async def handle_voice_callback(call: CallbackQuery) -> None:
+    """Process inline button callbacks requesting a summary in group chats."""
+
+    if _PIPELINE is None:  # pragma: no cover - configured during bootstrap
+        raise RuntimeError("Voice pipeline is not configured.")
+
+    data = call.data or ""
+    entry_id = data[len(_CALLBACK_PREFIX) :]
+    message = call.message
+    if not entry_id or message is None or message.chat is None:
+        await call.answer("Кнопка больше не работает.", show_alert=True)
+        return
+
+    chat = message.chat
+    entry = await _PENDING_STORE.get(entry_id)
+    if entry is None or entry.chat_id != chat.id:
+        await call.answer("Файл больше не доступен. Запишите новое голосовое.", show_alert=True)
+        return
+
+    if entry.is_expired(_PENDING_STORE.ttl):
+        await _remove_pending_entry(entry.id)
+        await call.answer("Файл больше не доступен. Запишите новое голосовое.", show_alert=True)
+        return
+
+    if entry.status == "processing":
+        await call.answer("Саммари уже готовится.", show_alert=True)
+        return
+
+    marked = await _PENDING_STORE.mark_processing(entry.id)
+    if not marked:
+        await call.answer("Саммари уже запускается.", show_alert=True)
+        return
+
+    await call.answer("Начинаю обработку…")
+
+    try:
+        summary = await _execute_voice_pipeline(entry.file_path, log_context=entry.id)
+    except VoiceProcessingFailure as exc:
+        await message.bot.send_message(
+            chat_id=entry.chat_id,
+            text=exc.user_message,
+            reply_to_message_id=entry.voice_message_id,
+        )
+    else:
+        await message.bot.send_message(
+            chat_id=entry.chat_id,
+            text=summary,
+            reply_to_message_id=entry.voice_message_id,
+        )
+    finally:
+        await _remove_pending_entry(entry.id)
 
 
 @voice_router.message(F.voice)
@@ -148,16 +282,36 @@ async def _handle_audio_content(
     try:
         await bot.download(file_id, destination=download_path)
         logger.info("Audio saved to %s", download_path)
-    except TelegramAPIError as exc:
+    except TelegramAPIError:
         logger.exception("Failed to download %s %s", log_label, file_id)
         await message.answer("Не удалось скачать аудио. Попробуйте позже.")
         return
-    except Exception as exc:  # noqa: BLE001 - unexpected download issues
+    except Exception:  # noqa: BLE001 - unexpected download issues
         logger.exception("Unexpected error while downloading %s %s", log_label, file_id)
         await message.answer("Произошла ошибка при загрузке аудио-файла.")
         return
 
-    await _process_downloaded_audio(message, download_path)
+    if message.chat.type == ChatType.PRIVATE:
+        await _process_downloaded_audio(message, download_path)
+        return
+
+    await _schedule_group_voice(message, download_path)
+
+
+def _detect_extension(mime_type: str | None) -> str:
+    mapping = {
+        "audio/ogg": ".ogg",
+        "audio/oga": ".oga",
+        "audio/x-opus+ogg": ".ogg",
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+    }
+    if not mime_type:
+        return ".ogg"
+    mime_type = mime_type.lower()
+    return mapping.get(mime_type, ".ogg")
 
 
 def _normalize_extension(extension: str | None) -> str | None:
@@ -171,7 +325,15 @@ def _normalize_extension(extension: str | None) -> str | None:
     return extension
 
 
-async def _process_downloaded_audio(message: Message, download_path: Path) -> None:
+class VoiceProcessingFailure(Exception):
+    """Wrap predictable pipeline failures with a user-friendly message."""
+
+    def __init__(self, user_message: str) -> None:
+        super().__init__(user_message)
+        self.user_message = user_message
+
+
+async def _execute_voice_pipeline(download_path: Path, *, log_context: str) -> str:
     if _PIPELINE is None:
         raise RuntimeError("Voice pipeline is not configured.")
 
@@ -181,26 +343,78 @@ async def _process_downloaded_audio(message: Message, download_path: Path) -> No
     response: str | None = None
 
     try:
-        logger.info("Queueing voice pipeline task for %s", download_path.name)
+        logger.info("Queueing voice pipeline task for %s", log_context)
         response = await _PIPELINE.process_voice(audio_path=download_path)
-        logger.info("Voice pipeline completed for %s", download_path.name)
+        logger.info("Voice pipeline completed for %s", log_context)
     except (AudioConversionError, AudioValidationError) as exc:
-        logger.warning("Audio preparation failed for %s: %s", download_path.name, exc)
-        await message.answer("Аудио-файл нельзя обработать. Попробуйте записать новое сообщение.")
-        return
+        logger.warning("Audio preparation failed for %s: %s", log_context, exc)
+        raise VoiceProcessingFailure(
+            "Аудио-файл нельзя обработать. Попробуйте записать новое сообщение."
+        ) from exc
     except (TranscriptionError, FormattingError, VoicePipelineError) as exc:
-        logger.warning("Pipeline failed for %s: %s", download_path.name, exc)
-        await message.answer(pipeline_error_reply)
-        return
-    except Exception:
-        logger.exception("Unhandled pipeline error for %s", download_path.name)
-        await message.answer(pipeline_error_reply)
-        return
-    finally:
-        await asyncio.to_thread(_PIPELINE.audio_processor.cleanup, download_path)
+        logger.warning("Pipeline failed for %s: %s", log_context, exc)
+        raise VoiceProcessingFailure(pipeline_error_reply) from exc
+    except Exception as exc:  # noqa: BLE001 - unexpected pipeline issues
+        logger.exception("Unhandled pipeline error for %s", log_context)
+        raise VoiceProcessingFailure(pipeline_error_reply) from exc
 
     text = (response or "").strip()
     if not text:
         text = "Похоже, голосовое пустое. Запиши сообщение ещё раз."
+    return text
 
-    await message.answer(text)
+
+async def _process_downloaded_audio(message: Message, download_path: Path) -> None:
+    try:
+        text = await _execute_voice_pipeline(download_path, log_context=download_path.name)
+    except VoiceProcessingFailure as exc:
+        await message.answer(exc.user_message)
+    else:
+        await message.answer(text)
+    finally:
+        await _cleanup_file(download_path)
+
+
+async def _schedule_group_voice(message: Message, download_path: Path) -> None:
+    entry_id = uuid4().hex
+    pending = PendingGroupVoice(
+        id=entry_id,
+        chat_id=message.chat.id,
+        voice_message_id=message.message_id,
+        reply_to_message_id=(
+            message.reply_to_message.message_id if message.reply_to_message else None
+        ),
+        file_path=download_path,
+        initiator_id=message.from_user.id if message.from_user else None,
+    )
+    await _PENDING_STORE.add(pending)
+
+    button = InlineKeyboardButton(
+        text="Сделать саммари",
+        callback_data=f"{_CALLBACK_PREFIX}{entry_id}",
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+    await message.reply(
+        "Нажмите кнопку, чтобы получить саммари.",
+        reply_markup=keyboard,
+    )
+
+
+async def _remove_pending_entry(entry_id: str) -> None:
+    entry = await _PENDING_STORE.pop(entry_id)
+    if entry is None:
+        return
+    await _cleanup_file(entry.file_path)
+
+
+async def _cleanup_file(path: Path) -> None:
+    try:
+        if _PIPELINE is not None:
+            await asyncio.to_thread(_PIPELINE.audio_processor.cleanup, path)
+        elif path.exists():  # pragma: no cover - safeguard for shutdown
+            path.unlink(missing_ok=True)
+    except FileNotFoundError:  # pragma: no cover - concurrent cleanup
+        return
+    except Exception:  # pragma: no cover - log but do not raise
+        logger.warning("Failed to cleanup file %s", path, exc_info=True)

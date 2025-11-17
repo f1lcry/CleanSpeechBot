@@ -7,6 +7,7 @@ import asyncio
 from aiogram import Bot, Dispatcher
 
 from bot.config import BotConfig, load_config
+from bot.handlers.group_handler import group_router
 from bot.handlers.text_handler import text_router
 from bot.handlers.voice_handler import configure_pipeline, voice_router
 from bot.services.logger import setup_logging
@@ -52,6 +53,7 @@ async def bootstrap() -> None:
     )
 
     configure_pipeline(pipeline)
+    dispatcher.include_router(group_router)
     dispatcher.include_router(text_router)
     dispatcher.include_router(voice_router)
 

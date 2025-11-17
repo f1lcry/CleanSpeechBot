@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from aiogram import F, Router
+from aiogram.enums import ChatType
 from aiogram.filters import CommandStart
 from aiogram.types import Message
 
@@ -12,7 +13,15 @@ text_router = Router(name="text_router")
 async def handle_start(message: Message) -> None:
     """Describe the bot workflow when /start is received."""
 
-    await message.answer("Привет! Пришли голосовое — получишь summary.")
+    chat_type = message.chat.type
+    if chat_type == ChatType.PRIVATE:
+        await message.answer("Привет! Пришли голосовое — получишь summary.")
+        return
+
+    await message.answer(
+        "Я делаю саммари для голосовых. Отправьте запись и дождитесь кнопки «Сделать"
+        " саммари» под сообщением, чтобы запустить обработку."
+    )
 
 
 @text_router.message(F.text)
