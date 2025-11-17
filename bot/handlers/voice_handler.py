@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Literal, Optional
 from uuid import uuid4
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.enums import ChatType, ContentType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
@@ -204,18 +204,22 @@ async def handle_voice_callback(call: CallbackQuery) -> None:
     try:
         summary = await _execute_voice_pipeline(entry.file_path, log_context=entry.id)
     except VoiceProcessingFailure as exc:
-        await message.bot.send_message(
+        await _finalize_prompt_response(
+            prompt_message=message,
+            bot=message.bot,
             chat_id=entry.chat_id,
-            text=exc.user_message,
             reply_to_message_id=entry.voice_message_id,
-            message_thread_id=entry.thread_id,
+            thread_id=entry.thread_id,
+            text=exc.user_message,
         )
     else:
-        await message.bot.send_message(
+        await _finalize_prompt_response(
+            prompt_message=message,
+            bot=message.bot,
             chat_id=entry.chat_id,
-            text=summary,
             reply_to_message_id=entry.voice_message_id,
-            message_thread_id=entry.thread_id,
+            thread_id=entry.thread_id,
+            text=summary,
         )
     finally:
         await _remove_pending_entry(entry.id)
@@ -439,6 +443,15 @@ async def _execute_voice_pipeline(download_path: Path, *, log_context: str) -> s
 
 
 async def _process_downloaded_audio(message: Message, download_path: Path) -> None:
+    prompt_message: Message | None = None
+    try:
+        prompt_message = await message.answer(
+            "Пожалуйста, подождите — готовлю саммари…",
+        )
+    except TelegramAPIError:
+        logger.warning(
+            "Failed to send waiting prompt for private message_id=%s", message.message_id
+        )
     try:
         logger.info(
             "Starting pipeline for private message_id=%s",
@@ -446,9 +459,23 @@ async def _process_downloaded_audio(message: Message, download_path: Path) -> No
         )
         text = await _execute_voice_pipeline(download_path, log_context=download_path.name)
     except VoiceProcessingFailure as exc:
-        await message.answer(exc.user_message)
+        await _finalize_prompt_response(
+            prompt_message=prompt_message,
+            bot=message.bot,
+            chat_id=message.chat.id,
+            reply_to_message_id=message.message_id,
+            thread_id=message.message_thread_id,
+            text=exc.user_message,
+        )
     else:
-        await message.answer(text)
+        await _finalize_prompt_response(
+            prompt_message=prompt_message,
+            bot=message.bot,
+            chat_id=message.chat.id,
+            reply_to_message_id=message.message_id,
+            thread_id=message.message_thread_id,
+            text=text,
+        )
     finally:
         await _cleanup_file(download_path)
         logger.info("Private message_id=%s finished", message.message_id)
@@ -487,6 +514,37 @@ async def _schedule_group_voice(message: Message, download_path: Path) -> None:
         message.chat.id,
         message.message_id,
         entry_id,
+    )
+
+
+async def _finalize_prompt_response(
+    *,
+    prompt_message: Message | None,
+    bot: Bot,
+    chat_id: int,
+    reply_to_message_id: int | None,
+    thread_id: int | None,
+    text: str,
+) -> None:
+    """Replace the waiting prompt text or fall back to a new reply message."""
+
+    if prompt_message is not None:
+        try:
+            await prompt_message.edit_text(text, reply_markup=None)
+            return
+        except TelegramAPIError:
+            logger.warning(
+                "Failed to edit prompt message chat_id=%s message_id=%s",
+                chat_id,
+                prompt_message.message_id,
+                exc_info=True,
+            )
+
+    await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_to_message_id=reply_to_message_id,
+        message_thread_id=thread_id,
     )
 
 
