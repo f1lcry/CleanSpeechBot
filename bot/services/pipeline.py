@@ -103,8 +103,26 @@ class VoicePipeline:
             wav_path = await self._convert(source_path)
             await self._validate(wav_path)
             transcript = await self._transcribe(wav_path)
-            formatted_text = await self._format(transcript)
-            result = formatted_text.strip()
+            formatted_text = ""
+            try:
+                formatted_text = await self._format(transcript)
+            except FormattingError as exc:
+                logger.warning(
+                    "Formatting skipped for %s due to formatter failure. Using raw transcript.",
+                    source_path.name,
+                    exc_info=exc,
+                )
+                result = transcript.strip()
+            except Exception as exc:  # pragma: no cover - defensive fallback for Ollama errors
+                logger.warning(
+                    "Formatting skipped for %s due to unexpected formatter error. Using raw transcript.",
+                    source_path.name,
+                    exc_info=exc,
+                )
+                result = transcript.strip()
+            else:
+                result = formatted_text.strip()
+
             transcript = ""
             formatted_text = ""
             logger.info("Pipeline finished for %s", source_path.name)
