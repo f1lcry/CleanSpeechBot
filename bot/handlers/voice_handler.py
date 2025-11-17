@@ -10,7 +10,7 @@ from typing import Dict, Optional
 from uuid import uuid4
 
 from aiogram import Bot, F, Router
-from aiogram.enums import ContentType
+from aiogram.enums import ChatType, ContentType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
     CallbackQuery,
@@ -119,12 +119,30 @@ async def handle_voice_messages(message: Message) -> None:
         await message.reply("Слишком короткое сообщение, попробуйте записать длиннее.")
         return
 
-    await _queue_summary_request(
-        message=message,
-        file_id=voice.file_id,
-        mime_type=voice.mime_type,
-        log_label="voice",
-    )
+    if _is_group_chat(message):
+        logger.info(
+            "Using inline-button flow for group voice: chat_id=%s message_id=%s",
+            message.chat.id,
+            message.message_id,
+        )
+        await _queue_summary_request(
+            message=message,
+            file_id=voice.file_id,
+            mime_type=voice.mime_type,
+            log_label="voice",
+        )
+    else:
+        logger.info(
+            "Processing private voice immediately: chat_id=%s message_id=%s",
+            message.chat.id,
+            message.message_id,
+        )
+        await _process_immediate_request(
+            message=message,
+            file_id=voice.file_id,
+            mime_type=voice.mime_type,
+            log_label="voice",
+        )
 
 
 @voice_router.message(
@@ -139,6 +157,8 @@ async def handle_audio_like_messages(message: Message) -> None:
         message.message_id,
         message.content_type,
     )
+    is_group = _is_group_chat(message)
+
     if message.content_type == ContentType.AUDIO and message.audio:
         audio = message.audio
         extension_hint = Path(audio.file_name).suffix if audio.file_name else None
@@ -148,13 +168,32 @@ async def handle_audio_like_messages(message: Message) -> None:
             message.message_id,
             audio.file_id,
         )
-        await _queue_summary_request(
-            message=message,
-            file_id=audio.file_id,
-            mime_type=audio.mime_type,
-            log_label="audio",
-            extension_hint=extension_hint,
-        )
+        if is_group:
+            logger.info(
+                "Queuing audio from group chat for inline flow: chat_id=%s message_id=%s",
+                message.chat.id,
+                message.message_id,
+            )
+            await _queue_summary_request(
+                message=message,
+                file_id=audio.file_id,
+                mime_type=audio.mime_type,
+                log_label="audio",
+                extension_hint=extension_hint,
+            )
+        else:
+            logger.info(
+                "Processing private audio immediately: chat_id=%s message_id=%s",
+                message.chat.id,
+                message.message_id,
+            )
+            await _process_immediate_request(
+                message=message,
+                file_id=audio.file_id,
+                mime_type=audio.mime_type,
+                log_label="audio",
+                extension_hint=extension_hint,
+            )
         return
 
     if message.content_type == ContentType.DOCUMENT and message.document:
@@ -173,13 +212,32 @@ async def handle_audio_like_messages(message: Message) -> None:
             message.message_id,
             document.file_id,
         )
-        await _queue_summary_request(
-            message=message,
-            file_id=document.file_id,
-            mime_type=document.mime_type,
-            log_label="document_audio",
-            extension_hint=extension_hint,
-        )
+        if is_group:
+            logger.info(
+                "Queuing audio document from group chat: chat_id=%s message_id=%s",
+                message.chat.id,
+                message.message_id,
+            )
+            await _queue_summary_request(
+                message=message,
+                file_id=document.file_id,
+                mime_type=document.mime_type,
+                log_label="document_audio",
+                extension_hint=extension_hint,
+            )
+        else:
+            logger.info(
+                "Processing private audio document immediately: chat_id=%s message_id=%s",
+                message.chat.id,
+                message.message_id,
+            )
+            await _process_immediate_request(
+                message=message,
+                file_id=document.file_id,
+                mime_type=document.mime_type,
+                log_label="document_audio",
+                extension_hint=extension_hint,
+            )
         return
 
     logger.debug(
@@ -424,52 +482,47 @@ async def _process_voice_request(*, bot: Bot, request: PendingVoiceRequest) -> N
     if _PIPELINE is None:
         raise RuntimeError("Voice pipeline is not configured.")
 
-    chat_id = request.chat_id
-    message_id = request.message_id
-    logger.info(
-        "Processing pending request: chat_id=%s message_id=%s", chat_id, message_id
-    )
-
-    tmp_dir = _PIPELINE.tmp_dir
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    extension = _normalize_extension(request.extension_hint) or _detect_extension(
-        request.mime_type
-    )
-    download_path = tmp_dir / (
-        f"{request.log_label}_{chat_id}_{message_id}_{uuid4().hex}{extension}"
-    )
-
-    try:
-        await bot.download(request.file_id, destination=download_path)
-        logger.info("Audio saved to %s", download_path)
-    except TelegramAPIError:
-        logger.exception(
-            "Failed to download %s %s", request.log_label, request.file_id
-        )
-        await bot.send_message(
-            chat_id,
-            "Не удалось скачать аудио. Попробуйте позже.",
-            reply_to_message_id=message_id,
-        )
-        return
-    except Exception:  # noqa: BLE001 - unexpected download issues
-        logger.exception(
-            "Unexpected error while downloading %s %s",
-            request.log_label,
-            request.file_id,
-        )
-        await bot.send_message(
-            chat_id,
-            "Произошла ошибка при загрузке аудио-файла.",
-            reply_to_message_id=message_id,
-        )
-        return
-
-    await _process_downloaded_audio(
+    await _download_and_process_audio(
         bot=bot,
-        chat_id=chat_id,
-        reply_to_message_id=message_id,
-        download_path=download_path,
+        chat_id=request.chat_id,
+        reply_to_message_id=request.message_id,
+        file_id=request.file_id,
+        mime_type=request.mime_type,
+        log_label=request.log_label,
+        extension_hint=request.extension_hint,
+    )
+
+
+async def _process_immediate_request(
+    *,
+    message: Message,
+    file_id: str,
+    mime_type: str | None,
+    log_label: str,
+    extension_hint: str | None = None,
+) -> None:
+    """Download and process an audio file immediately (private chats)."""
+
+    if _PIPELINE is None:
+        raise RuntimeError("Voice pipeline is not configured.")
+
+    bot = message.bot
+    if bot is None:
+        logger.error(
+            "Message has no bot instance attached: chat_id=%s message_id=%s",
+            message.chat.id if message.chat else "unknown",
+            message.message_id,
+        )
+        return
+
+    await _download_and_process_audio(
+        bot=bot,
+        chat_id=message.chat.id,
+        reply_to_message_id=message.message_id,
+        file_id=file_id,
+        mime_type=mime_type,
+        log_label=log_label,
+        extension_hint=extension_hint,
     )
 
 
@@ -540,4 +593,69 @@ async def _process_downloaded_audio(
         chat_id,
         reply_to_message_id,
         len(text),
+    )
+
+
+def _is_group_chat(message: Message) -> bool:
+    chat = message.chat
+    if chat is None:
+        return False
+    chat_type = chat.type
+    if isinstance(chat_type, ChatType):
+        return chat_type in {ChatType.GROUP, ChatType.SUPERGROUP}
+    return chat_type in {ChatType.GROUP.value, ChatType.SUPERGROUP.value, "group", "supergroup"}
+
+
+async def _download_and_process_audio(
+    *,
+    bot: Bot,
+    chat_id: int,
+    reply_to_message_id: int,
+    file_id: str,
+    mime_type: str | None,
+    log_label: str,
+    extension_hint: str | None = None,
+) -> None:
+    if _PIPELINE is None:
+        raise RuntimeError("Voice pipeline is not configured.")
+
+    logger.info(
+        "Downloading %s for processing: chat_id=%s message_id=%s",
+        log_label,
+        chat_id,
+        reply_to_message_id,
+    )
+
+    tmp_dir = _PIPELINE.tmp_dir
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    extension = _normalize_extension(extension_hint) or _detect_extension(mime_type)
+    download_path = tmp_dir / (
+        f"{log_label}_{chat_id}_{reply_to_message_id}_{uuid4().hex}{extension}"
+    )
+
+    try:
+        await bot.download(file_id, destination=download_path)
+        logger.info("Audio saved to %s", download_path)
+    except TelegramAPIError:
+        logger.exception("Failed to download %s %s", log_label, file_id)
+        await bot.send_message(
+            chat_id,
+            "Не удалось скачать аудио. Попробуйте позже.",
+            reply_to_message_id=reply_to_message_id,
+        )
+        return
+    except Exception:  # noqa: BLE001 - unexpected download issues
+        logger.exception("Unexpected error while downloading %s %s", log_label, file_id)
+        await bot.send_message(
+            chat_id,
+            "Произошла ошибка при загрузке аудио-файла.",
+            reply_to_message_id=reply_to_message_id,
+        )
+        return
+
+    await _process_downloaded_audio(
+        bot=bot,
+        chat_id=chat_id,
+        reply_to_message_id=reply_to_message_id,
+        download_path=download_path,
     )
