@@ -80,7 +80,7 @@ def _detect_extension(mime_type: str | None) -> str:
     return mapping.get(mime_type, ".ogg")
 
 
-@voice_router.message(content_types=[ContentType.VOICE])
+@voice_router.message(F.voice)
 async def handle_voice_messages(message: Message) -> None:
     """Handle Telegram voice messages (opus-in-ogg)."""
 
