@@ -26,16 +26,27 @@ async def handle_bot_added(event: ChatMemberUpdated) -> None:
 
     new_status = event.new_chat_member.status
     old_status = event.old_chat_member.status
+    chat = event.chat
+
+    logger.info(
+        "my_chat_member update: chat_id=%s type=%s old=%s new=%s",
+        chat.id,
+        chat.type,
+        old_status,
+        new_status,
+    )
 
     if new_status not in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}:
+        logger.debug("Ignoring update because new_status=%s", new_status)
         return
     if old_status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR}:
+        logger.debug("Bot already had access to chat_id=%s", chat.id)
         return
 
-    chat = event.chat
     if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        logger.debug("Skipping greeting because chat type=%s is not a group", chat.type)
         return
 
-    logger.info("Bot added to chat_id=%s (type=%s)", chat.id, chat.type)
+    logger.info("Bot added to chat_id=%s (type=%s). Sending greeting.", chat.id, chat.type)
 
     await event.bot.send_message(chat_id=chat.id, text=greeting_text)
