@@ -10,6 +10,7 @@ from typing import Dict, Optional
 from uuid import uuid4
 
 from aiogram import Bot, F, Router
+from aiogram.enums import ContentType
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import (
     CallbackQuery,
@@ -77,58 +78,59 @@ def _detect_extension(mime_type: str | None) -> str:
     return mapping.get(mime_type, ".ogg")
 
 
-@voice_router.message(F.voice)
-async def handle_voice_message(message: Message) -> None:
-    """Handle Telegram voice messages."""
-
-    voice = message.voice
-    if voice is None:  # pragma: no cover - safeguarded by filter
-        return
-
-    await _queue_summary_request(
-        message=message,
-        file_id=voice.file_id,
-        mime_type=voice.mime_type,
-        log_label="voice",
+@voice_router.message(
+    F.content_type.in_(
+        {ContentType.VOICE, ContentType.AUDIO, ContentType.DOCUMENT}
     )
+)
+async def handle_audio_like_messages(message: Message) -> None:
+    """Handle all message types that can contain audio needing a summary."""
 
-
-@voice_router.message(F.audio)
-async def handle_audio_file(message: Message) -> None:
-    """Handle Telegram audio files."""
-
-    audio = message.audio
-    if audio is None:  # pragma: no cover - safeguarded by filter
+    if message.content_type == ContentType.VOICE and message.voice:
+        await _queue_summary_request(
+            message=message,
+            file_id=message.voice.file_id,
+            mime_type=message.voice.mime_type,
+            log_label="voice",
+        )
         return
 
-    extension_hint = Path(audio.file_name).suffix if audio.file_name else None
-    await _queue_summary_request(
-        message=message,
-        file_id=audio.file_id,
-        mime_type=audio.mime_type,
-        log_label="audio",
-        extension_hint=extension_hint,
-    )
-
-
-@voice_router.message(F.document)
-async def handle_audio_document(message: Message) -> None:
-    """Handle audio files sent as generic documents."""
-
-    document = message.document
-    if document is None:  # pragma: no cover - safeguarded by filter
+    if message.content_type == ContentType.AUDIO and message.audio:
+        audio = message.audio
+        extension_hint = Path(audio.file_name).suffix if audio.file_name else None
+        await _queue_summary_request(
+            message=message,
+            file_id=audio.file_id,
+            mime_type=audio.mime_type,
+            log_label="audio",
+            extension_hint=extension_hint,
+        )
         return
 
-    if not _is_audio_document(document):
+    if message.content_type == ContentType.DOCUMENT and message.document:
+        document = message.document
+        if not _is_audio_document(document):
+            logger.debug(
+                "Ignoring non-audio document in chat_id=%s message_id=%s",
+                message.chat.id,
+                message.message_id,
+            )
+            return
+        extension_hint = Path(document.file_name).suffix if document.file_name else None
+        await _queue_summary_request(
+            message=message,
+            file_id=document.file_id,
+            mime_type=document.mime_type,
+            log_label="document_audio",
+            extension_hint=extension_hint,
+        )
         return
 
-    extension_hint = Path(document.file_name).suffix if document.file_name else None
-    await _queue_summary_request(
-        message=message,
-        file_id=document.file_id,
-        mime_type=document.mime_type,
-        log_label="document_audio",
-        extension_hint=extension_hint,
+    logger.debug(
+        "Unhandled content_type=%s for chat_id=%s message_id=%s",
+        message.content_type,
+        message.chat.id,
+        message.message_id,
     )
 
 
