@@ -80,16 +80,23 @@ def _detect_extension(mime_type: str | None) -> str:
     return mapping.get(mime_type, ".ogg")
 
 
-@voice_router.message(F.voice)
+@voice_router.message(F.content_type == ContentType.VOICE)
 async def handle_voice_messages(message: Message) -> None:
     """Handle Telegram voice messages (opus-in-ogg)."""
 
+    logger.info(
+        "Voice message received event: chat_id=%s message_id=%s content_type=%s",
+        message.chat.id,
+        message.message_id,
+        message.content_type,
+    )
     voice = message.voice
     if voice is None:
         logger.debug(
-            "Voice handler invoked without voice payload: chat_id=%s message_id=%s",
+            "Voice handler invoked without payload: chat_id=%s message_id=%s content_type=%s",
             message.chat.id,
             message.message_id,
+            message.content_type,
         )
         return
 
@@ -103,6 +110,12 @@ async def handle_voice_messages(message: Message) -> None:
     )
 
     if duration < _MIN_VOICE_DURATION_SECONDS:
+        logger.info(
+            "Voice rejected because it is too short: chat_id=%s message_id=%s duration=%s",
+            message.chat.id,
+            message.message_id,
+            duration,
+        )
         await message.reply("Слишком короткое сообщение, попробуйте записать длиннее.")
         return
 
@@ -120,9 +133,21 @@ async def handle_voice_messages(message: Message) -> None:
 async def handle_audio_like_messages(message: Message) -> None:
     """Handle message types that can contain audio needing a summary."""
 
+    logger.info(
+        "Audio-like message received: chat_id=%s message_id=%s content_type=%s",
+        message.chat.id,
+        message.message_id,
+        message.content_type,
+    )
     if message.content_type == ContentType.AUDIO and message.audio:
         audio = message.audio
         extension_hint = Path(audio.file_name).suffix if audio.file_name else None
+        logger.info(
+            "Detected audio payload: chat_id=%s message_id=%s file_id=%s",
+            message.chat.id,
+            message.message_id,
+            audio.file_id,
+        )
         await _queue_summary_request(
             message=message,
             file_id=audio.file_id,
@@ -142,6 +167,12 @@ async def handle_audio_like_messages(message: Message) -> None:
             )
             return
         extension_hint = Path(document.file_name).suffix if document.file_name else None
+        logger.info(
+            "Detected audio document: chat_id=%s message_id=%s file_id=%s",
+            message.chat.id,
+            message.message_id,
+            document.file_id,
+        )
         await _queue_summary_request(
             message=message,
             file_id=document.file_id,
@@ -185,6 +216,13 @@ async def _queue_summary_request(
         raise RuntimeError("Voice pipeline is not configured.")
 
     chat_id = message.chat.id
+    logger.info(
+        "Queueing summary request: chat_id=%s message_id=%s file_id=%s log_label=%s",
+        chat_id,
+        message.message_id,
+        file_id,
+        log_label,
+    )
     request = PendingVoiceRequest(
         chat_id=chat_id,
         message_id=message.message_id,
@@ -207,10 +245,33 @@ async def _queue_summary_request(
         log_label,
     )
     keyboard = _build_summary_keyboard(key)
-    await message.reply(
-        "Нажмите кнопку, чтобы получить саммари",
-        reply_markup=keyboard,
-    )
+    try:
+        reply = await message.reply(
+            "Нажмите кнопку, чтобы получить саммари",
+            reply_markup=keyboard,
+        )
+        logger.info(
+            "Prompt with inline button sent: chat_id=%s message_id=%s reply_id=%s",
+            chat_id,
+            message.message_id,
+            reply.message_id,
+        )
+    except TelegramAPIError:
+        logger.exception(
+            "Failed to send inline button prompt: chat_id=%s message_id=%s",
+            chat_id,
+            message.message_id,
+        )
+        async with _PENDING_LOCK:
+            _PENDING_REQUESTS.pop(key, None)
+        await message.answer(
+            "Не получилось показать кнопку саммари. Попробуйте отправить аудио ещё раз.",
+        )
+        logger.info(
+            "Fallback message sent after inline keyboard failure: chat_id=%s message_id=%s",
+            chat_id,
+            message.message_id,
+        )
 
 
 def _make_request_key(chat_id: int, message_id: int) -> str:
@@ -266,6 +327,11 @@ async def _mark_button_in_progress(message: Message | None) -> None:
         return
     try:
         await message.edit_reply_markup(reply_markup=_build_locked_keyboard())
+        logger.info(
+            "Inline keyboard locked: chat_id=%s message_id=%s",
+            message.chat.id if message.chat else "unknown",
+            message.message_id,
+        )
     except TelegramAPIError:
         logger.debug("Failed to update inline keyboard for message_id=%s", message.message_id)
 
@@ -275,6 +341,11 @@ async def _remove_keyboard(message: Message | None) -> None:
         return
     try:
         await message.edit_reply_markup(reply_markup=None)
+        logger.info(
+            "Inline keyboard removed: chat_id=%s message_id=%s",
+            message.chat.id if message.chat else "unknown",
+            message.message_id,
+        )
     except TelegramAPIError:
         logger.debug("Failed to remove inline keyboard for message_id=%s", message.message_id)
 
@@ -283,6 +354,11 @@ async def _remove_keyboard(message: Message | None) -> None:
 async def handle_locked_summary(callback: CallbackQuery) -> None:
     """Gracefully acknowledge callbacks on disabled keyboards."""
 
+    logger.info(
+        "Locked summary callback received: user_id=%s message_id=%s",
+        callback.from_user.id if callback.from_user else "unknown",
+        callback.message.message_id if callback.message else "unknown",
+    )
     await callback.answer("Запрос уже обработан.")
 
 
@@ -293,6 +369,11 @@ async def handle_summary_callback(callback: CallbackQuery) -> None:
     key = (callback.data or "")[len(_SUMMARY_PREFIX) :]
     message = callback.message
     if not key or message is None:
+        logger.warning(
+            "Invalid callback received: callback_id=%s user_id=%s",
+            callback.id,
+            callback.from_user.id if callback.from_user else "unknown",
+        )
         await callback.answer("Сообщение не найдено.")
         return
 
@@ -316,6 +397,12 @@ async def handle_summary_callback(callback: CallbackQuery) -> None:
         request.in_progress = True
 
     await _mark_button_in_progress(message)
+    logger.info(
+        "Callback acknowledged: key=%s chat_id=%s user_id=%s",
+        key,
+        request.chat_id,
+        callback.from_user.id if callback.from_user else "unknown",
+    )
     await callback.answer("Запускаю обработку...")
     try:
         await _process_voice_request(bot=callback.bot, request=request)
@@ -447,4 +534,10 @@ async def _process_downloaded_audio(
         chat_id,
         text,
         reply_to_message_id=reply_to_message_id,
+    )
+    logger.info(
+        "Summary delivered: chat_id=%s reply_to=%s text_length=%s",
+        chat_id,
+        reply_to_message_id,
+        len(text),
     )
